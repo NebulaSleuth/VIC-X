@@ -21,7 +21,9 @@ The reference model is a VICE fork, `vice-vicx` (branch `vicx`, from VICE
 
 ## Status
 
-Spec step 1 is implemented in the fork and covered by the tests:
+Spec steps 1 and 2 are implemented in the fork and covered by the tests.
+
+Step 1:
 
 - unlock: `$56 $58 $21` written consecutively to `$D06F`; `$00` relocks;
   every reset locks; while locked `$D040-$D06F` are stock VIC-II mirrors
@@ -33,7 +35,21 @@ Spec step 1 is implemented in the fork and covered by the tests:
 - CTRL bit 3: VIC-II colours shown through palette entries 0-15
 - snapshot support; `-vicx` / `+vicx` command-line switch (resource `VICXEnable`)
 
-Next: spec step 2, VRAM and one 8-bit bitmap layer.
+Step 2:
+
+- layer 0 as an 8-bit 320x200 bitmap from VRAM (CTRL bit 0): base, line
+  stride and double-width pixels from the layer setup at `$20800`
+- the layer fills the VIC-II display window and sits behind the VIC-II; it
+  shows through pixels drawn in the `$D021` colour when CTRL bit 4 is set,
+  and the border, sprites and other VIC-II pixels stay in front
+- CTRL and the layer setup are latched at the start of each raster line, so
+  raster splits work
+- CAP_FEAT reports bit 1 (bitmap)
+
+Not yet: 4-bit bitmaps, tiles, layer 1, the layer order register, scrolling
+(steps 3 on). Palette changes still take effect per frame, not mid-frame.
+
+Next: spec step 3, tile layers, scrolling and the mixing order.
 
 ## Building the fork
 
@@ -76,6 +92,10 @@ options and environment variables.
 | `t07_palette`      | palette reset values and read/write of all 256 entries |
 | `t08_remap`        | CTRL bit 3 remaps VIC-II colours (screenshot pixels); stock without VIC-X |
 | `t09_snapshot`     | VIC-X state survives a snapshot save and load |
+| `t10_bitmap`       | 8-bit bitmap layer: alignment with the display window, VIC-II text in front (8565 and 6569); hidden without VIC-X |
+| `t11_split`        | CTRL and layer base changed mid-frame take effect from the next raster line |
+| `t12_front`        | border (38 columns), sprites in front; `$D021` changes keep the background transparent |
+| `t13_stride`       | bitmap base, stride 0 and double-width pixels |
 
 ### Stock compatibility
 

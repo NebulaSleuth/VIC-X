@@ -89,6 +89,45 @@ ok:
 ok:
 .endmacro
 
+; Write `count' (1-65535) copies of A through port 0, which must already
+; point at the start with a step.  Uses X and Y.
+.macro P0_FILL count
+        .local outer, inner
+        ldy #>(count)
+        ldx #<(count)
+        beq inner                       ; low byte 0: start with a full page
+        iny
+inner:  sta VICX_P0_DATA
+        dex
+        bne inner
+        dey
+        bne inner
+.endmacro
+
+; Write one palette entry (VIC-X must be unlocked).  Uses A.
+.macro SET_PAL index, r, g, b
+        VICX_P0_SET VICX_PALETTE + (index) * 4, VICX_STEP_1
+        lda #r
+        sta VICX_P0_DATA
+        lda #g
+        sta VICX_P0_DATA
+        lda #b
+        sta VICX_P0_DATA
+.endmacro
+
+; Clear the text screen at $0400 to spaces.  Uses A and X.
+.macro CLEAR_SCREEN
+        .local loop
+        lda #$20
+        ldx #0
+loop:   sta $0400,x
+        sta $0500,x
+        sta $0600,x
+        sta $06E8,x
+        inx
+        bne loop
+.endmacro
+
 ; Wait until the VIC-II raster passes line 0 `count' times (count >= 1).
 .macro WAIT_FRAMES count
         .local w1, w2, loop

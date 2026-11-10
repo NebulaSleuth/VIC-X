@@ -98,6 +98,25 @@ VICX_MIXSETUP   = $20840        ; layer order and sprite engine setup
 VICX_DMADESC    = $20880        ; 4 descriptors x 32 bytes
 VICX_COLLIST    = $20900        ; collision list
 
+; --- Layer setup (32 bytes per layer at VICX_LAYER0 / VICX_LAYER1) -------
+; The mode byte encoding is the VICE model's (the spec lists the fields but
+; not their bits yet).
+VICX_L_MODE     = 0             ; +0  mode, tile size, double width
+VICX_L_MAPSIZE  = 1             ; +1  map width and height codes
+VICX_L_BASE     = 2             ; +2-+4 map or bitmap base in VRAM
+VICX_L_TILEBASE = 5             ; +5-+7 tile data base in VRAM
+VICX_L_SCROLLX  = 8             ; +8-+9
+VICX_L_SCROLLY  = 10            ; +10-+11
+VICX_L_STRIDE   = 12            ; +12-+13 bitmap bytes per line (0-1024)
+VICX_L_PALBANK  = 14            ; +14 palette bank for 4-bit bitmaps
+
+VICX_LMODE_TILE4   = $00        ; bits 0-1: mode
+VICX_LMODE_TILE8   = $01
+VICX_LMODE_BITMAP4 = $02
+VICX_LMODE_BITMAP8 = $03        ; the only mode the VICE model draws so far
+VICX_LMODE_TILE16  = $04        ; 16x16 tiles
+VICX_LMODE_DOUBLE  = $08        ; double-width pixels (160 across)
+
 ; --- Macros -------------------------------------------------------------
 
 ; Unlock VIC-X. Run with interrupts disabled so nothing writes in between.
