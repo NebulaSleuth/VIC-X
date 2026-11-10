@@ -1,0 +1,78 @@
+; t04_id_caps - ID, VERSION, capability registers, CTRL, IRQ_EN, reserved
+; registers and the frame counter.
+;
+; Step 1 values: VERSION $01 (spec 0.1 draft), CAP_VRAM $10 (128 KB);
+; XRAM, sprites and all feature bits are 0 until those steps land.
+;
+; RUN: -vicx
+
+.include "harness.inc"
+
+.code
+main:
+        VICX_UNLOCK_SEQ
+        EXPECT VICX_ID0,         $56, 2
+        EXPECT VICX_ID1,         $58, 3
+        EXPECT VICX_VERSION,     $01, 4
+        EXPECT VICX_CAP_VRAM,    $10, 5
+        EXPECT VICX_CAP_XRAM,    $00, 6
+        EXPECT VICX_CAP_SPR,     $00, 7
+        EXPECT VICX_CAP_SPRLINE, $00, 8
+        EXPECT VICX_CAP_FEAT,    $00, 9
+
+        ; ID and capabilities are read-only
+        lda #$12
+        sta VICX_ID0
+        sta VICX_VERSION
+        sta VICX_CAP_VRAM
+        EXPECT VICX_ID0,      $56, 10
+        EXPECT VICX_VERSION,  $01, 11
+        EXPECT VICX_CAP_VRAM, $10, 12
+
+        ; CTRL: reset value 0, bits 0-4 read back, bits 5-7 read 0
+        EXPECT VICX_CTRL, $00, 13
+        lda #$FF
+        sta VICX_CTRL
+        EXPECT VICX_CTRL, $1F, 14
+        lda #$00
+        sta VICX_CTRL
+        EXPECT VICX_CTRL, $00, 15
+
+        ; IRQ_EN keeps bits 0-2; IRQ_STAT reads 0 (no sources in step 1)
+        lda #$FF
+        sta VICX_IRQ_EN
+        EXPECT VICX_IRQ_EN, $07, 16
+        lda #$00
+        sta VICX_IRQ_EN
+        EXPECT VICX_IRQ_STAT, $00, 17
+
+        ; DMA_CMD: not busy
+        EXPECT VICX_DMA_CMD, $00, 18
+
+        ; reserved $D05B-$D06E read $FF and ignore writes
+        ldx #$5B
+@res:   lda #$00
+        sta $D000,x
+        lda $D000,x
+        cmp #$FF
+        beq @resok
+        FAIL 19
+@resok: inx
+        cpx #$6F
+        bne @res
+
+        ; FRAME counts frames
+        WAIT_FRAMES 1
+        lda VICX_FRAME
+        sta frame0
+        WAIT_FRAMES 3
+        lda VICX_FRAME
+        sec
+        sbc frame0
+        EXPECT_A 3, 20
+
+        VICX_LOCK_SEQ
+        PASS
+
+.bss
+frame0: .res 1

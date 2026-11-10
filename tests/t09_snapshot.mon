@@ -1,0 +1,2 @@
+trace exec $033c
+command 1 "dump \"t09_snapshot.vsf\""

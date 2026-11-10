@@ -1,0 +1,2 @@
+break $033c
+command 1 "reset 0"
