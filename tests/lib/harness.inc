@@ -142,3 +142,66 @@ w2:     lda $D012               ; ... then for line 0: $D012 = 0 and bit 8 clear
         dey
         bne loop
 .endmacro
+
+; Write `count' (1-65535) copies of a 16-bit value (low byte first) through
+; port 0, which must already point at the start with step 1.  Uses A, X, Y.
+.macro P0_FILL16 value, count
+        .local inner
+        ldy #>(count)
+        ldx #<(count)
+        beq inner
+        iny
+inner:  lda #<(value)
+        sta VICX_P0_DATA
+        lda #>(value)
+        sta VICX_P0_DATA
+        dex
+        bne inner
+        dey
+        bne inner
+.endmacro
+
+; Write one 16-bit value at a VRAM address.  Uses A.
+.macro POKE16 addr, value
+        VICX_P0_SET addr, VICX_STEP_1
+        lda #<(value)
+        sta VICX_P0_DATA
+        lda #>(value)
+        sta VICX_P0_DATA
+.endmacro
+
+; Write the first 15 bytes of a layer setup (VICX_LAYER0 or VICX_LAYER1).
+; Uses A.
+.macro LAYER_SET layer, mode, mapsize, base, tilebase, sx, sy, stride, bank
+        VICX_P0_SET layer, VICX_STEP_1
+        lda #(mode)
+        sta VICX_P0_DATA
+        lda #(mapsize)
+        sta VICX_P0_DATA
+        lda #<(base)
+        sta VICX_P0_DATA
+        lda #>(base)
+        sta VICX_P0_DATA
+        lda #(((base) >> 16) & $FF)
+        sta VICX_P0_DATA
+        lda #<(tilebase)
+        sta VICX_P0_DATA
+        lda #>(tilebase)
+        sta VICX_P0_DATA
+        lda #(((tilebase) >> 16) & $FF)
+        sta VICX_P0_DATA
+        lda #<(sx)
+        sta VICX_P0_DATA
+        lda #>(sx)
+        sta VICX_P0_DATA
+        lda #<(sy)
+        sta VICX_P0_DATA
+        lda #>(sy)
+        sta VICX_P0_DATA
+        lda #<(stride)
+        sta VICX_P0_DATA
+        lda #>(stride)
+        sta VICX_P0_DATA
+        lda #(bank)
+        sta VICX_P0_DATA
+.endmacro

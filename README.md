@@ -21,7 +21,7 @@ The reference model is a VICE fork, `vice-vicx` (branch `vicx`, from VICE
 
 ## Status
 
-Spec steps 1 and 2 are implemented in the fork and covered by the tests.
+Spec steps 1 to 3 are implemented in the fork and covered by the tests.
 
 Step 1:
 
@@ -47,10 +47,22 @@ Step 2:
   raster splits work
 - CAP_FEAT reports bit 1 (bitmap)
 
-Not yet: 4-bit bitmaps, tiles, layer 1, the layer order register, scrolling
-(steps 3 on). Palette changes still take effect per frame, not mid-frame.
+Step 3:
 
-Next: spec step 3, tile layers, scrolling and the mixing order.
+- layers 0 and 1, each a tile layer (4- or 8-bit, 8x8 or 16x16 tiles, maps
+  of 32-256 tiles each way, flip X/Y, palette banks) or a bitmap (4- or
+  8-bit); tile layers scroll with 12-bit scroll X/Y that wrap around the map
+- 4-bit pixels use palette entry bank x 16 + n; colour 0 is transparent in
+  every mode
+- the layer order register at `$20840`: a 2-bit priority per source, higher
+  in front, ties in the order VIC-II, layer 0, layer 1; latched per line
+- the border stays on top of every order
+- CAP_FEAT reports tiles and bitmaps ($03)
+
+Not yet: the sprite engine (step 4), DMA and the XRAM windows (step 5).
+Palette changes still take effect per frame, not mid-frame.
+
+Next: spec step 4, the sprite engine.
 
 ## Building the fork
 
@@ -98,6 +110,11 @@ options and environment variables.
 | `t12_front`        | border (38 columns), sprites in front; `$D021` changes keep the background transparent |
 | `t13_stride`       | bitmap base, stride 0 and double-width pixels |
 | `t14_transparent`  | bitmap colour 0 is transparent and shows the VIC-II background |
+| `t15_tiles8`       | 8-bit 8x8 tiles: map entries, flips, tile numbers above 255, map wrap |
+| `t16_tiles4`       | layer 1 alone: 4-bit 16x16 tiles, palette banks, a 64-tile-wide map |
+| `t17_scroll`       | tile scroll X/Y wrapping around the map in both directions |
+| `t18_bitmap4`      | 4-bit bitmap with a palette bank; scroll ignored |
+| `t19_order`        | layer order register in four raster bands; border on top |
 
 ### Stock compatibility
 

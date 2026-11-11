@@ -112,9 +112,32 @@ VICX_L_PALBANK  = 14            ; +14 palette bank for 4-bit bitmaps
 VICX_LMODE_TILE4   = $00        ; bits 0-1: mode
 VICX_LMODE_TILE8   = $01
 VICX_LMODE_BITMAP4 = $02
-VICX_LMODE_BITMAP8 = $03        ; the only mode the VICE model draws so far
+VICX_LMODE_BITMAP8 = $03
 VICX_LMODE_TILE16  = $04        ; 16x16 tiles
 VICX_LMODE_DOUBLE  = $08        ; double-width pixels (160 across); bits 4-7 reserved, write 0
+
+; Map size (+1): bits 0-1 width, bits 2-3 height, in tiles
+VICX_MAP_W32    = $00
+VICX_MAP_W64    = $01
+VICX_MAP_W128   = $02
+VICX_MAP_W256   = $03
+VICX_MAP_H32    = $00
+VICX_MAP_H64    = $04
+VICX_MAP_H128   = $08
+VICX_MAP_H256   = $0C
+
+; Tile map entry (16 bits, little endian)
+VICX_TILE_FLIPX = $0400
+VICX_TILE_FLIPY = $0800
+VICX_TILE_BANK  = $1000         ; multiply by the palette bank (0-15), 4-bit tiles
+
+; Layer order ($20840): a 2-bit priority per source, higher = in front.
+; Equal priorities fall back to: VIC-II, layer 0, layer 1 (front to back).
+VICX_ORDER      = VICX_MIXSETUP
+VICX_ORDER_L0   = 0             ; shift of each source's priority field
+VICX_ORDER_L1   = 2
+VICX_ORDER_VIC  = 4
+VICX_ORDER_SPR  = 6
 
 ; --- Macros -------------------------------------------------------------
 

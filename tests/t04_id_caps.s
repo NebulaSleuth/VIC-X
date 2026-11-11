@@ -2,7 +2,7 @@
 ; registers and the frame counter.
 ;
 ; Values in the VICE model: VERSION $01 (spec 0.1 draft), CAP_VRAM $10
-; (128 KB), CAP_FEAT $02 (bitmap; layer 0 in 8-bit mode since step 2).
+; (128 KB), CAP_FEAT $03 (tiles and bitmaps since step 3).
 ; XRAM, sprites and the other feature bits stay 0 until those steps land.
 ;
 ; RUN: -vicx
@@ -19,7 +19,7 @@ main:
         EXPECT VICX_CAP_XRAM,    $00, 6
         EXPECT VICX_CAP_SPR,     $00, 7
         EXPECT VICX_CAP_SPRLINE, $00, 8
-        EXPECT VICX_CAP_FEAT,    VICX_FEAT_BITMAP, 9
+        EXPECT VICX_CAP_FEAT,    VICX_FEAT_TILES | VICX_FEAT_BITMAP, 9
 
         ; ID and capabilities are read-only
         lda #$12
