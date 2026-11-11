@@ -205,3 +205,27 @@ inner:  lda #<(value)
         lda #(bank)
         sta VICX_P0_DATA
 .endmacro
+
+; Write a whole sprite table entry.  `xh' = size and flip bits (VICX_SW_*,
+; VICX_SH_*, VICX_S_FLIP*), `yh' = VICX_S_ON / VICX_S_BEHIND / groups,
+; `pat' = pattern VRAM address (a multiple of 32), `attr' = VICX_S_ATTR.
+; Uses A.
+.macro SPRITE entry, xpos, ypos, xh, yh, pat, attr
+        VICX_P0_SET VICX_SPRITES + (entry) * 8, VICX_STEP_1
+        lda #<(xpos)
+        sta VICX_P0_DATA
+        lda #(((xpos) >> 8) & 3) | (xh)
+        sta VICX_P0_DATA
+        lda #<(ypos)
+        sta VICX_P0_DATA
+        lda #(((ypos) >> 8) & 3) | (yh)
+        sta VICX_P0_DATA
+        lda #<((pat) / 32)
+        sta VICX_P0_DATA
+        lda #>((pat) / 32)
+        sta VICX_P0_DATA
+        lda #(attr)
+        sta VICX_P0_DATA
+        lda #0
+        sta VICX_P0_DATA
+.endmacro

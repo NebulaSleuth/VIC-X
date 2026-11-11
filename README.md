@@ -21,7 +21,7 @@ The reference model is a VICE fork, `vice-vicx` (branch `vicx`, from VICE
 
 ## Status
 
-Spec steps 1 to 3 are implemented in the fork and covered by the tests.
+Spec steps 1 to 4 are implemented in the fork and covered by the tests.
 
 Step 1:
 
@@ -59,10 +59,22 @@ Step 3:
 - the border stays on top of every order
 - CAP_FEAT reports tiles and bitmaps ($03)
 
-Not yet: the sprite engine (step 4), DMA and the XRAM windows (step 5).
-Palette changes still take effect per frame, not mid-frame.
+Step 4:
 
-Next: spec step 4, the sprite engine.
+- the sprite engine (CTRL bit 2): 128 entries latched each frame, 8-64
+  pixels each way, 4- or 8-bit pixels, flips, double width, X/Y in
+  display-window pixels wrapping at 1024; lower entries in front; the behind
+  bit puts a sprite one step back in the layer order
+- per-line limits of 32 sprites and 640 pixels; the overflow flag at `$20841`
+- collisions by group mask into the list at `$20900`, IRQ_STAT bit 0
+- IRQ_STAT bit 2 at the start of each frame; IRQ_STAT AND IRQ_EN drives the
+  CPU's IRQ line
+- CAP_SPR $80, CAP_SPRLINE $20, CAP_FEAT $07
+
+Not yet: DMA and the XRAM windows (step 5). Palette changes still take
+effect per frame, not mid-frame.
+
+Next: spec step 5, DMA and the XRAM windows.
 
 ## Building the fork
 
@@ -99,7 +111,7 @@ options and environment variables.
 | `t01_locked`       | locked/disabled: mirrors behave as stock, broken unlock sequences fail |
 | `t02_stock_unlock` | VIC-X disabled: the full unlock sequence does nothing |
 | `t03_unlock`       | unlock, ID, relock, restart rules, no write-through while unlocked |
-| `t04_id_caps`      | VERSION, capability registers, CTRL, IRQ_EN, reserved, FRAME |
+| `t04_id_caps`      | VERSION, capability registers, CTRL, IRQ_EN/IRQ_STAT, reserved, FRAME |
 | `t05_ports`        | port address registers, all step codes both ways, 18-bit wrap, data |
 | `t06_reset`        | a machine reset (via the monitor) locks and restores defaults |
 | `t07_palette`      | palette reset values and read/write of all 256 entries |
@@ -116,6 +128,10 @@ options and environment variables.
 | `t18_bitmap4`      | 4-bit bitmap with a palette bank; scroll ignored |
 | `t19_order`        | layer order register in four raster bands; border on top |
 | `t20_scroll_double` | with double-width pixels, scroll X counts layer pixels |
+| `t21_sprites`      | sprite sizes, 4/8-bit pixels, banks, flips, double width, wrap, on bit |
+| `t22_sprite_order` | lower entries in front, the behind bit, sprites in the layer order |
+| `t23_sprite_limits` | 32 sprites and 640 pixels per line, overflow flag |
+| `t24_collisions`   | collision list, group masks, transparency, IRQ_STAT bit 0 and the CPU IRQ |
 
 ### Stock compatibility
 

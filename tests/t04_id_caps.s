@@ -2,8 +2,9 @@
 ; registers and the frame counter.
 ;
 ; Values in the VICE model: VERSION $01 (spec 0.1 draft), CAP_VRAM $10
-; (128 KB), CAP_FEAT $03 (tiles and bitmaps since step 3).
-; XRAM, sprites and the other feature bits stay 0 until those steps land.
+; (128 KB), CAP_SPR $80 and CAP_SPRLINE $20 (the target limits), CAP_FEAT $07
+; (tiles, bitmaps, sprites since step 4).  XRAM, the blitter and the
+; windows stay 0 until step 5.
 ;
 ; RUN: -vicx
 
@@ -17,9 +18,9 @@ main:
         EXPECT VICX_VERSION,     $01, 4
         EXPECT VICX_CAP_VRAM,    $10, 5
         EXPECT VICX_CAP_XRAM,    $00, 6
-        EXPECT VICX_CAP_SPR,     $00, 7
-        EXPECT VICX_CAP_SPRLINE, $00, 8
-        EXPECT VICX_CAP_FEAT,    VICX_FEAT_TILES | VICX_FEAT_BITMAP, 9
+        EXPECT VICX_CAP_SPR,     $80, 7
+        EXPECT VICX_CAP_SPRLINE, $20, 8
+        EXPECT VICX_CAP_FEAT,    VICX_FEAT_TILES | VICX_FEAT_BITMAP | VICX_FEAT_SPRITES, 9
 
         ; ID and capabilities are read-only
         lda #$12
@@ -39,13 +40,18 @@ main:
         sta VICX_CTRL
         EXPECT VICX_CTRL, $00, 15
 
-        ; IRQ_EN keeps bits 0-2; IRQ_STAT reads 0 (no sources in step 1)
+        ; IRQ_EN keeps bits 0-2.  IRQ_STAT: writing 1s clears; with nothing
+        ; colliding, bits 0-1 stay 0 (bit 2, start of frame, may set again)
         lda #$FF
         sta VICX_IRQ_EN
         EXPECT VICX_IRQ_EN, $07, 16
         lda #$00
         sta VICX_IRQ_EN
-        EXPECT VICX_IRQ_STAT, $00, 17
+        lda #$07
+        sta VICX_IRQ_STAT
+        lda VICX_IRQ_STAT
+        and #$03
+        EXPECT_A $00, 17
 
         ; DMA_CMD: not busy
         EXPECT VICX_DMA_CMD, $00, 18

@@ -139,6 +139,38 @@ VICX_ORDER_L1   = 2
 VICX_ORDER_VIC  = 4
 VICX_ORDER_SPR  = 6
 
+; Sprite engine status ($20841), written at the start of each frame for the
+; frame that just ended
+VICX_SPRSTAT          = VICX_MIXSETUP + 1
+VICX_SPRSTAT_OVERFLOW = $01     ; a line dropped sprites
+VICX_SPRSTAT_COLLFULL = $02     ; more colliding pairs than the list holds
+
+; Collision list ($20900): count, then up to 127 pairs (lower entry first)
+
+; --- Sprite table entry (8 bytes at VICX_SPRITES + n * 8) ---------------
+VICX_S_XL       = 0             ; X bits 0-7 (display-window pixels)
+VICX_S_XH       = 1             ; bits 0-1 X 8-9, 2-3 width, 4-5 height, 6 flip X, 7 flip Y
+VICX_S_YL       = 2             ; Y bits 0-7 (display-window lines)
+VICX_S_YH       = 3             ; bits 0-1 Y 8-9, 2 on, 3 behind, 4-7 collision groups
+VICX_S_PAT      = 4             ; +4-+5 pattern address / 32
+VICX_S_ATTR     = 6             ; bits 0-3 palette bank, 4 8-bit, 5 double width
+
+VICX_SW_8       = $00           ; width (in VICX_S_XH)
+VICX_SW_16      = $04
+VICX_SW_32      = $08
+VICX_SW_64      = $0C
+VICX_SH_8       = $00           ; height (in VICX_S_XH)
+VICX_SH_16      = $10
+VICX_SH_32      = $20
+VICX_SH_64      = $30
+VICX_S_FLIPX    = $40
+VICX_S_FLIPY    = $80
+VICX_S_ON       = $04           ; in VICX_S_YH
+VICX_S_BEHIND   = $08
+VICX_S_GROUP    = $10           ; multiply by the 4-bit group mask
+VICX_S_8BIT     = $10           ; in VICX_S_ATTR
+VICX_S_DOUBLE   = $20
+
 ; --- Macros -------------------------------------------------------------
 
 ; Unlock VIC-X. Run with interrupts disabled so nothing writes in between.
