@@ -11,7 +11,7 @@ the CPU has to do while VIC-X does the work.
 | `bullets` | 128 sprites: a 32x32 ship and 127 bullets in four rotating spiral arms over a deep-space bitmap, with hit detection | sprite engine, collision groups and hit masks, DMA table updates, bitmap layer |
 | `gallery` | 256-colour pictures streamed from XRAM, faded in and out | 8-bit bitmaps, double buffering, background DMA, palette fades |
 | `bigworld` | A 320x3198 world (1 MB, six scenes from space to a molten core) scrolling up and down, one new row streamed in per frame | XRAM, a 256-row VRAM ring with a wrapping bitmap base, row DMA, XRAM window (scene table), REU DMA (captions) |
-| `wide` | The parallax world switching every 5 seconds between the 320x200 window and the whole visible frame | wide window, edges latched per line and per frame, scroll offsets that keep the scene still |
+| `wide` | The parallax world switching every 5 seconds between the 320x200 window and the whole visible frame; in full-frame mode the text bar moves to the top of the frame | wide window, edges latched per line and per frame, scroll offsets that keep the scene still, a sprite-engine text bar, layer order |
 | `sixteen` | A plain C64 multicolour bitmap, alternating between the stock palette and 16 colours picked for the picture | VIC-II colour remap (CTRL bit 3) |
 
 ## Artwork
