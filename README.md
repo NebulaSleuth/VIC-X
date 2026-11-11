@@ -42,6 +42,7 @@ Step 2:
 - the layer fills the VIC-II display window and sits behind the VIC-II; it
   shows through pixels drawn in the `$D021` colour when CTRL bit 4 is set,
   and the border, sprites and other VIC-II pixels stay in front
+- bitmap colour 0 is transparent (the `$D021` colour shows through)
 - CTRL and the layer setup are latched at the start of each raster line, so
   raster splits work
 - CAP_FEAT reports bit 1 (bitmap)
@@ -96,6 +97,7 @@ options and environment variables.
 | `t11_split`        | CTRL and layer base changed mid-frame take effect from the next raster line |
 | `t12_front`        | border (38 columns), sprites in front; `$D021` changes keep the background transparent |
 | `t13_stride`       | bitmap base, stride 0 and double-width pixels |
+| `t14_transparent`  | bitmap colour 0 is transparent and shows the VIC-II background |
 
 ### Stock compatibility
 
