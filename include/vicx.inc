@@ -147,6 +147,14 @@ VICX_SPRSTAT_COLLFULL = $02     ; more colliding pairs than the list holds
 
 ; Collision list ($20900): count, then up to 127 pairs (lower entry first)
 
+; Wide window ($20842-$20845): how far each edge of the display window moves
+; into the border.  0 = the 320x200 area; values stop at the visible edge,
+; so $FF = all of it.  (0,0) is the top-left of the window as widened.
+VICX_WIDE_LEFT   = VICX_MIXSETUP + 2    ; pixels, latched per line
+VICX_WIDE_RIGHT  = VICX_MIXSETUP + 3    ; pixels, latched per line
+VICX_WIDE_TOP    = VICX_MIXSETUP + 4    ; lines, latched per frame
+VICX_WIDE_BOTTOM = VICX_MIXSETUP + 5    ; lines, latched per frame
+
 ; --- Sprite table entry (8 bytes at VICX_SPRITES + n * 8) ---------------
 VICX_S_XL       = 0             ; X bits 0-7 (display-window pixels)
 VICX_S_XH       = 1             ; bits 0-1 X 8-9, 2-3 width, 4-5 height, 6 flip X, 7 flip Y

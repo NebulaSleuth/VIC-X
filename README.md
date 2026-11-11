@@ -71,6 +71,14 @@ Step 4:
   CPU's IRQ line
 - CAP_SPR $80, CAP_SPRLINE $20, CAP_FEAT $07
 
+Wide window (added after step 4):
+
+- `$20842-$20845` move the display window's edges into the border, up to
+  the visible frame; layers and sprites fill it and (0,0) is its corner
+- left and right are latched per line, top and bottom per frame
+- in the widened part, border pixels are background (transparent with CTRL
+  bit 4); over the 320x200 area the border stays on top
+
 Not yet: DMA and the XRAM windows (step 5). Palette changes still take
 effect per frame, not mid-frame.
 
@@ -132,6 +140,8 @@ options and environment variables.
 | `t22_sprite_order` | lower entries in front, the behind bit, sprites in the layer order |
 | `t23_sprite_limits` | 32 sprites and 640 pixels per line, overflow flag |
 | `t24_collisions`   | collision list, group masks, transparency, IRQ_STAT bit 0 and the CPU IRQ |
+| `t25_wide`         | full-size wide window: layer and sprite in the border, origin, border on top over 320x200 |
+| `t26_wide_split`   | partly widened window, left edge split per line, top edge, layer in front |
 
 ### Stock compatibility
 
