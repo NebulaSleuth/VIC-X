@@ -1,11 +1,14 @@
 # Tools
 
-Developer tools for VIC-X. Python 3, standard library only.
+Developer tools for VIC-X. Python 3; standard library only, except
+`prep_art.py`, which needs Pillow.
 
 | Tool | What it does |
 |------|--------------|
 | `png2vicx.py` | PNG to VIC-X data: 8- or 4-bit bitmaps, 8x8 or 16x16 tiles with a map, sprite patterns, palettes and palette fade levels |
-| `gen_art.py`  | generates the demo artwork as PNGs |
+| `nanobanana.py` | generates a picture with Google's Nano Banana models (Gemini image API; key from `GEMINI_API_KEY`) |
+| `prep_art.py` | turns the generated pictures into VIC-X-ready PNGs for the demos (needs Pillow) |
+| `gen_art.py`  | draws procedural demo art (the bullets; the other pictures are fallbacks) |
 | `pngio.py`    | the PNG reader and writer both use |
 
 ## png2vicx

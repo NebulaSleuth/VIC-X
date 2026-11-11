@@ -1,6 +1,8 @@
 ; bullets.s - Bullet storm: 128 sprites, collision groups, DMA table updates.
 ;
-; Entry 0 is the player's 16x16 ship, sliding along the bottom (x 16-240).  Entries
+; Entry 0 is the player's 32x32 ship, sliding along the bottom (x 16-240),
+; over a deep-space picture on layer 1 (an 8-bit bitmap).  The ship and the
+; backdrop were made with Nano Banana (see art/).  Entries
 ; 1-127 are 8x8 bullets fired from the centre in four rotating spiral arms,
 ; two per frame; a bullet that leaves the screen waits for its next turn.
 ; Bullets belong to group 2 and hit group 1; the ship belongs to group 1 and
@@ -34,11 +36,12 @@ VYH     = $9900
 VYS     = $9980
 PTR     = $FD
 
-SHIP_V  = $00000                ; patterns in VRAM
-BUL_V   = $00100
+SHIP_V  = $00000                ; patterns in VRAM (ship 1 KB)
+BUL_V   = $00400
+SPACE_V = $10000                ; backdrop bitmap
 CX      = 156                   ; emitter (window pixels)
 CY      = 90
-PLAYER_Y = 176
+PLAYER_Y = 164
 PARKED  = $80                   ; XH value of a bullet waiting to fire
 
 GROUPS_SHIP   = $10             ; +3 bits 4-7: group 1
@@ -69,6 +72,9 @@ main:
         XRAM_TO_VRAM SHIP_SPR, SHIP_V, SHIP_SPR_LEN
         XRAM_TO_VRAM BULLET_SPR, BUL_V, BULLET_SPR_LEN
         XRAM_TO_VRAM SHIP_PAL, VICX_PALETTE + 208 * 4, SHIP_PAL_LEN
+        XRAM_TO_VRAM SPACE_PIX, SPACE_V, SPACE_PIX_LEN
+        XRAM_TO_VRAM SPACE_PAL, VICX_PALETTE + 16 * 4, SPACE_PAL_LEN
+        LAYER_SET VICX_LAYER1, VICX_LMODE_BITMAP8, 0, SPACE_V, 0, 0, 0, 320, 0
         XRAM_TO_VRAM BULLET_PAL, VICX_PALETTE + 232 * 4, BULLET_PAL_LEN
 
         ; descriptor 1: the sprite table, C64 RAM -> $20400, every frame
@@ -79,7 +85,7 @@ main:
         sta px
         lda #1
         sta pdir
-        lda #VICX_SW_16 | VICX_SH_16
+        lda #VICX_SW_32 | VICX_SH_32
         sta SPRTAB + 1
         lda #PLAYER_Y
         sta SPRTAB + 2
@@ -137,7 +143,7 @@ main:
         sta arm
         sta hits
         sta hits + 1
-        lda #VICX_CTRL_SPR
+        lda #VICX_CTRL_SPR | VICX_CTRL_L1 | VICX_CTRL_BGTRANS
         sta VICX_CTRL
 
 loop:
@@ -161,7 +167,7 @@ loop:
         cld
         jsr show_hits
 :
-        ; the ship slides between x 16 and 240
+        ; the ship slides between x 16 and 240 (its size bits stay in +1)
         lda px
         clc
         adc pdir

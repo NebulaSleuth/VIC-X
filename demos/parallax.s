@@ -3,8 +3,9 @@
 ;
 ; Layer 1 (back): mountains and sky, 8x8 8-bit tiles, scrolls 1 pixel every
 ; 2 frames.  Layer 0 (front): hills and trees with transparent sky, 1 pixel
-; per frame.  Both maps are 64x32 tiles (512 pixels wide, seamless), so the
-; scroll registers just count up and the map wraps.  The VIC-II's text rows
+; per frame.  Both maps are 128x32 tiles (1024 pixels wide, seamless), so
+; the scroll registers just count up and the map wraps.  The artwork was
+; made with Nano Banana (see art/).  The VIC-II's text rows
 ; 0-2 are a score bar: CTRL bit 4 is off for those lines (raster split), so
 ; the VIC-II background covers the layers there, and on below.
 ; The border turns red while the CPU works each frame (the CPU-time meter).
@@ -13,10 +14,10 @@ NEED_XRAM_MB = 2
 .include "demo.inc"
 .include "assets.inc"
 
-BACK_TILES_V  = $00000
-FRONT_TILES_V = $09000
-BACK_MAP_V    = $10000
-FRONT_MAP_V   = $11000
+BACK_TILES_V  = $00000          ; up to 20 KB
+FRONT_TILES_V = $05000          ; up to 48 KB
+BACK_MAP_V    = $11000          ; 8 KB each
+FRONT_MAP_V   = $13000
 
 .code
 main:
@@ -48,8 +49,10 @@ main:
         XRAM_TO_VRAM FRONT_MAP, FRONT_MAP_V, FRONT_MAP_LEN
         XRAM_TO_VRAM BACK_PAL, VICX_PALETTE + 16 * 4, BACK_PAL_LEN
         XRAM_TO_VRAM FRONT_PAL, VICX_PALETTE + 112 * 4, FRONT_PAL_LEN
-        LAYER_SET VICX_LAYER0, VICX_LMODE_TILE8, VICX_MAP_W64 | VICX_MAP_H32, FRONT_MAP_V, FRONT_TILES_V, 0, 0, 0, 0
-        LAYER_SET VICX_LAYER1, VICX_LMODE_TILE8, VICX_MAP_W64 | VICX_MAP_H32, BACK_MAP_V, BACK_TILES_V, 0, 0, 0, 0
+        LAYER_SET VICX_LAYER0, VICX_LMODE_TILE8, VICX_MAP_W128 | VICX_MAP_H32, FRONT_MAP_V, FRONT_TILES_V, 0, 0, 0, 0
+        ; scroll Y 40 lifts the mountains above the front hills; the empty map
+        ; rows that come into view at the bottom stay behind the hills
+        LAYER_SET VICX_LAYER1, VICX_LMODE_TILE8, VICX_MAP_W128 | VICX_MAP_H32, BACK_MAP_V, BACK_TILES_V, 0, 40, 0, 0
 
         lda #0
         sta front_x

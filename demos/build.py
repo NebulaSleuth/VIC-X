@@ -6,7 +6,9 @@
                                screenshot as build/<demo>-check.png
 
 Each demo is a PRG plus an REU image that holds its pictures, tiles and
-palettes (XRAM is the REU's memory).  Run one in the GTK fork with:
+palettes (XRAM is the REU's memory).  The artwork is art/*.png, made from
+the Nano Banana pictures in art/raw/ by ../tools/prep_art.py (run again with
+--prep after changing them); the bullet sprites come from ../tools/gen_art.py.  Run one in the GTK fork with:
 
   x64sc -vicx -reu -reusize 2048 -reuimage build/<demo>.reu build/<demo>.prg
 """
@@ -21,7 +23,8 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parent
 BUILD = HERE / "build"
-ART = BUILD / "art"
+ART = HERE / "art"                  # prepared artwork (committed)
+GEN = BUILD / "art"                 # procedural artwork (bullets)
 TOOLS = REPO / "tools"
 
 CC65 = os.environ.get("VICX_CC65", r"D:\Repos\TimeWarrior\tools\cc65\bin")
@@ -30,13 +33,14 @@ DLLDIR = os.environ.get("VICX_DLLDIR", r"C:\msys64\ucrt64\bin")
 
 REU_SIZE = 2 * 1024 * 1024          # -reusize 2048
 
-# png -> converter arguments
+# (png, folder) -> converter arguments
 CONVERSIONS = [
-    ("parallax_back", ["--mode", "tiles8", "--palbase", "16", "--colours", "96"]),
-    ("parallax_front", ["--mode", "tiles8", "--palbase", "112", "--colours", "96"]),
-    ("ship", ["--mode", "sprites8", "--sprite", "16x16", "--palbase", "208", "--colours", "24"]),
-    ("bullets", ["--mode", "sprites8", "--sprite", "8x8", "--palbase", "232", "--colours", "24"]),
-] + [(f"gallery{i}", ["--mode", "bitmap8", "--palbase", "16", "--colours", "240", "--fades", "16"])
+    ("parallax_back", ART, ["--mode", "tiles8", "--palbase", "16", "--colours", "96"]),
+    ("parallax_front", ART, ["--mode", "tiles8", "--palbase", "112", "--colours", "96"]),
+    ("ship", ART, ["--mode", "sprites8", "--sprite", "32x32", "--palbase", "208", "--colours", "24"]),
+    ("space", ART, ["--mode", "bitmap8", "--palbase", "16", "--colours", "192"]),
+    ("bullets", GEN, ["--mode", "sprites8", "--sprite", "8x8", "--palbase", "232", "--colours", "24"]),
+] + [(f"gallery{i}", ART, ["--mode", "bitmap8", "--palbase", "16", "--colours", "240", "--fades", "16"])
      for i in range(4)]
 
 # demo -> assets in its REU image: (symbol, file in build/)
@@ -49,6 +53,7 @@ DEMOS = {
     ],
     "bullets": [
         ("SHIP_SPR", "ship.spr"), ("SHIP_PAL", "ship.pal"),
+        ("SPACE_PIX", "space.pix"), ("SPACE_PAL", "space.pal"),
         ("BULLET_SPR", "bullets.spr"), ("BULLET_PAL", "bullets.pal"),
     ],
     "gallery": [(f"PIC{i}_PIX", f"gallery{i}.pix") for i in range(4)]
@@ -60,11 +65,13 @@ def run(cmd, **kw):
     subprocess.run([str(c) for c in cmd], check=True, **kw)
 
 
-def make_assets():
-    ART.mkdir(parents=True, exist_ok=True)
-    run([sys.executable, TOOLS / "gen_art.py", ART], stdout=subprocess.DEVNULL)
-    for name, args in CONVERSIONS:
-        run([sys.executable, TOOLS / "png2vicx.py", ART / f"{name}.png", "-o", BUILD / name] + args)
+def make_assets(prep):
+    if prep:
+        run([sys.executable, TOOLS / "prep_art.py", ART / "raw", ART])
+    GEN.mkdir(parents=True, exist_ok=True)
+    run([sys.executable, TOOLS / "gen_art.py", GEN], stdout=subprocess.DEVNULL)
+    for name, folder, args in CONVERSIONS:
+        run([sys.executable, TOOLS / "png2vicx.py", folder / f"{name}.png", "-o", BUILD / name] + args)
 
 
 def pack(demo, assets):
@@ -134,11 +141,13 @@ def main():
     ap.add_argument("--check", action="store_true", help="run each demo headless and save a screenshot")
     ap.add_argument("--cycles", type=int, default=12000000, help="cycles to run for --check")
     ap.add_argument("--skip-art", action="store_true", help="reuse the converted art in build/")
+    ap.add_argument("--prep", action="store_true",
+                    help="remake art/*.png from art/raw/ first (needs Pillow)")
     args = ap.parse_args()
 
     BUILD.mkdir(exist_ok=True)
     if not args.skip_art:
-        make_assets()
+        make_assets(args.prep)
     for demo in args.demos or DEMOS:
         used = pack(demo, DEMOS[demo])
         prg = assemble(demo)
