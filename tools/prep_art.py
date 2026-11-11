@@ -37,15 +37,23 @@ def fit(img, w, h, anchor="centre"):
     return img.crop((x, y, x + w, y + h))
 
 
-def key_magenta(img):
-    """RGB -> RGBA with the magenta background transparent."""
+def key_magenta(img, cut=40):
+    """RGB -> RGBA with the magenta background transparent.
+
+    Spill = how far both red and blue exceed green; magenta has a lot, the
+    foreground none.  Pixels with spill above `cut' (the background and the
+    edge pixels the JPEG blended into it) become transparent; the rest lose
+    their spill, so no pink tint is left along the edges."""
     out = img.convert("RGBA")
     px = out.load()
     for y in range(out.height):
         for x in range(out.width):
             r, g, b, _ = px[x, y]
-            if r > 170 and b > 170 and g < 110:
+            spill = min(r, b) - g
+            if spill > cut:
                 px[x, y] = (0, 0, 0, 0)
+            elif spill > 0:
+                px[x, y] = (r - spill, g, b - spill, 255)
     return out
 
 
