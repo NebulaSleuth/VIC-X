@@ -49,12 +49,18 @@ default place):
 
 ## Running
 
-In the GTK build of the VICE fork, from this folder (MSYS2 UCRT64 DLLs on
-the PATH):
+In the GTK build of the VICE fork, from an MSYS2 UCRT64 shell (any folder):
 
-    D:\Repos\vice-vicx\vice\build-ucrt64\src\x64sc.exe -vicx -reu -reusize 2048 -reuimage build\parallax.reu build\parallax.prg
+    D:/Repos/vice-vicx/vice/build-ucrt64/src/x64sc.exe -directory D:/Repos/vice-vicx/vice/data -vicx -reu -reusize 2048 -reuimage D:/Repos/VIC-X/demos/build/parallax.reu -autostartprgmode 1 -autostart D:/Repos/VIC-X/demos/build/parallax.prg
 
-Replace `parallax` with `bullets` or `gallery`. Without `-vicx`, or without
+Replace both `parallax` with `bullets` or `gallery`.
+
+- `-directory` points VICE at its ROMs and keymaps; a build run from its
+  build tree does not find them otherwise ("Default keymap not found").
+- Use full paths: a relative `-reuimage` path that does not exist is
+  reported as "not valid for option `-reuimage`".
+- `-autostartprgmode 1` puts the PRG straight into memory; without it VICE
+  loads it through an emulated disk drive, which takes a while. Without `-vicx`, or without
 the REU, a demo says what is missing and stops.
 
 ## Notes
