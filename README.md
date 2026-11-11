@@ -115,6 +115,7 @@ options and environment variables.
 | `t17_scroll`       | tile scroll X/Y wrapping around the map in both directions |
 | `t18_bitmap4`      | 4-bit bitmap with a palette bank; scroll ignored |
 | `t19_order`        | layer order register in four raster bands; border on top |
+| `t20_scroll_double` | with double-width pixels, scroll X counts layer pixels |
 
 ### Stock compatibility
 
