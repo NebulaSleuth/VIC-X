@@ -9,10 +9,11 @@
 ;     transparent
 ;   6, 7, 8 solid (100,50) %1111: three pairs
 ;   9 solid (200,50) %0000 and 10 solid (202,50) %1111: group mask 0
-; The list for a frame is published at the start of the next one: count 4,
-; then pairs (0,1) (6,7) (6,8) (7,8), in the order the lines and pixels are
-; drawn.  Then: with IRQ_EN bit 0 clear no IRQ arrives; with it set, the IRQ
-; handler runs every frame and acknowledges by writing IRQ_STAT.
+; The list for a frame is published after the last display line (raster
+; line 250): count 4, then pairs (0,1) (6,7) (6,8) (7,8), in the order the
+; lines and pixels are drawn.  Then: with IRQ_EN bit 0 clear no IRQ arrives;
+; with it set, the IRQ handler runs every frame, on raster line 251 or 252,
+; and acknowledges by writing IRQ_STAT.
 ;
 ; RUN: -vicx
 
@@ -100,7 +101,13 @@ main:
         cmp #2
         bcs :+
         FAIL 4
-:       PASS
+:       lda irqline
+        cmp #251
+        bcc :+
+        cmp #253
+        bcs :+
+        PASS
+:       FAIL 5
 
 fail_a:
   .ifdef RESULT_HOOK
@@ -110,6 +117,8 @@ fail_a:
 :       jmp :-
 
 irq:
+        lda $D012
+        sta irqline
         inc count
         lda #VICX_IRQ_SPRCOL
         sta VICX_IRQ_STAT
@@ -120,3 +129,4 @@ expected: .byte 4, 0, 1, 6, 7, 6, 8, 7, 8
 
 .bss
 count: .res 1
+irqline: .res 1
