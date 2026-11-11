@@ -9,9 +9,13 @@
 ;     transparent
 ;   6, 7, 8 solid (100,50) %1111: three pairs
 ;   9 solid (200,50) %0000 and 10 solid (202,50) %1111: group mask 0
+;   11, 12 solid (150,100) and (152,100): groups %0010, hit mask (+7)
+;     %0001, like two bullets: they ignore each other
+;   13 solid (154,100): groups %0001, hit mask %0010, like the player:
+;     hits both bullets
 ; The list for a frame is published after the last display line (raster
-; line 250): count 4, then pairs (0,1) (6,7) (6,8) (7,8), in the order the
-; lines and pixels are drawn.  Then: with IRQ_EN bit 0 clear no IRQ arrives;
+; line 250): count 6, then pairs (0,1) (6,7) (6,8) (7,8) (11,13) (12,13), in
+; the order the lines and pixels are drawn.  Then: with IRQ_EN bit 0 clear no IRQ arrives;
 ; with it set, the IRQ handler runs every frame, on raster line 251 or 252,
 ; and acknowledges by writing IRQ_STAT.
 ;
@@ -22,6 +26,12 @@
 SOLID = $0000
 EDGE  = $0040
 G1    = VICX_S_GROUP
+
+.macro HITMASK entry, mask
+        VICX_P0_SET VICX_SPRITES + (entry) * 8 + VICX_S_HITS, VICX_STEP_0
+        lda #(mask)
+        sta VICX_P0_DATA
+.endmacro
 
 .code
 main:
@@ -54,6 +64,13 @@ main:
         SPRITE 9, 200,  50, VICX_SW_8 | VICX_SH_8, VICX_S_ON,              SOLID, VICX_S_8BIT
         SPRITE 10, 202, 50, VICX_SW_8 | VICX_SH_8, VICX_S_ON | G1 * %1111, SOLID, VICX_S_8BIT
 
+        SPRITE 11, 150, 100, VICX_SW_8 | VICX_SH_8, VICX_S_ON | G1 * %0010, SOLID, VICX_S_8BIT
+        SPRITE 12, 152, 100, VICX_SW_8 | VICX_SH_8, VICX_S_ON | G1 * %0010, SOLID, VICX_S_8BIT
+        SPRITE 13, 154, 100, VICX_SW_8 | VICX_SH_8, VICX_S_ON | G1 * %0001, SOLID, VICX_S_8BIT
+        HITMASK 11, %0001
+        HITMASK 12, %0001
+        HITMASK 13, %0010
+
         lda #VICX_CTRL_SPR
         sta VICX_CTRL
         WAIT_FRAMES 3
@@ -69,7 +86,7 @@ main:
         adc #10                         ; check 10 + byte index
         jmp fail_a
 :       inx
-        cpx #9
+        cpx #13
         bne @cmp
 
         ; IRQ_STAT bit 0 is set
@@ -125,7 +142,7 @@ irq:
         jmp $EA81
 
 .rodata
-expected: .byte 4, 0, 1, 6, 7, 6, 8, 7, 8
+expected: .byte 6, 0, 1, 6, 7, 6, 8, 7, 8, 11, 13, 12, 13
 
 .bss
 count: .res 1

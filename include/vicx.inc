@@ -197,9 +197,10 @@ VICX_DMA_BUSY     = $80         ; DMA_CMD read
 VICX_S_XL       = 0             ; X bits 0-7 (display-window pixels)
 VICX_S_XH       = 1             ; bits 0-1 X 8-9, 2-3 width, 4-5 height, 6 flip X, 7 flip Y
 VICX_S_YL       = 2             ; Y bits 0-7 (display-window lines)
-VICX_S_YH       = 3             ; bits 0-1 Y 8-9, 2 on, 3 behind, 4-7 collision groups
+VICX_S_YH       = 3             ; bits 0-1 Y 8-9, 2 on, 3 behind, 4-7 groups it belongs to
 VICX_S_PAT      = 4             ; +4-+5 pattern address / 32
 VICX_S_ATTR     = 6             ; bits 0-3 palette bank, 4 8-bit, 5 double width
+VICX_S_HITS     = 7             ; bits 0-3 groups this sprite hits (0 = its own groups); 4-7 reserved
 
 VICX_SW_8       = $00           ; width (in VICX_S_XH)
 VICX_SW_16      = $04
