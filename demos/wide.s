@@ -82,6 +82,7 @@ main:
         sta front_x + 1
         sta back_x
         sta back_x + 1
+        sta frame
         sta wide
         sta step
         lda #SWITCH_FRAMES
@@ -115,14 +116,15 @@ loop:
         sta step
         jsr show_mode
 @noswitch:
-        ; scroll: front 2 pixels, back 1 pixel per frame
-        clc
-        lda front_x
-        adc #2
-        sta front_x
-        bcc :+
+        ; scroll: front 1 pixel per frame, back 1 pixel every second frame
+        inc front_x
+        bne :+
         inc front_x + 1
-:       inc back_x
+:       inc frame
+        lda frame
+        and #1
+        bne :+
+        inc back_x
         bne :+
         inc back_x + 1
 :       lda step                        ; mid-switch: keep last frame's offsets
@@ -215,6 +217,7 @@ offx:       .byte LEFT, 0           ; scroll X offset: normal, wide
 .bss
 front_x: .res 2
 back_x:  .res 2
+frame:   .res 1
 wide:    .res 1
 step:    .res 1
 timer:   .res 1
