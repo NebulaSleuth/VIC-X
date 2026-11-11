@@ -98,14 +98,13 @@ Palette changes still take effect per frame, not mid-frame.
 
 Step 6 (first part):
 
-- demos `parallax`, `bullets` and `gallery`, built
+- demos `parallax`, `bullets`, `gallery`, `bigworld`, `wide` and `sixteen`, built
   from generated art through the PNG converter (`demos/`, `tools/`)
 - sprite hit masks (entry +7 bits 0-3), added when the bullet storm showed
   that shared group bits cannot keep bullets from colliding with each other
 
-Next: the remaining demos (Big world; Any sixteen colours and Nothing
-breaks need outside software), and running the tests on FPGA simulation
-and hardware.
+Next: "Nothing breaks" (needs well-known games and demos), music for Big
+world, and running the tests on FPGA simulation and hardware.
 
 ## Building the fork
 
