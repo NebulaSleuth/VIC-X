@@ -124,7 +124,7 @@ done:
 ; The raster line counts the time (one frame = 312 lines on PAL, 263 on
 ; NTSC; the KERNAL notes which at $02A6).  Every 16 frames the busiest of
 ; them is printed as "CPU nnn%" at screen address CPU_TEXT (defined by the
-; demo, 8 characters).  Uses A, X, Y.
+; demo, 8 characters).  cpu_start and cpu_end keep X and Y; they use A.
 
 ; Current raster line -> cpu_line (9 bits)
 read_line:
@@ -141,7 +141,7 @@ read_line:
         rts
 
 cpu_start:
-        jsr read_line
+        jsr read_line                   ; uses A only
         lda cpu_line
         sta cpu_t0
         lda cpu_line + 1
@@ -149,6 +149,18 @@ cpu_start:
         rts
 
 cpu_end:
+        txa                             ; keep X and Y
+        pha
+        tya
+        pha
+        jsr cpu_measure
+        pla
+        tay
+        pla
+        tax
+        rts
+
+cpu_measure:
         jsr read_line
         sec                             ; lines = now - start (+ frame if wrapped)
         lda cpu_line
