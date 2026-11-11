@@ -5,8 +5,8 @@
 ; 320x200 area and the whole visible frame (all four edges $FF: they stop at
 ; the edge of what the display shows).  The scroll positions shift by the
 ; window's left and top extension, so the scene stays where it is and only
-; the border fills in.  The VIC-II score bar stays inside the 320x200 area;
-; the border is the bar's blue.
+; the border fills in.  The border is black; the VIC-II score bar stays
+; inside the 320x200 area.
 ;
 ; In full-frame mode the bar moves to the top of the frame, where the VIC-II
 ; cannot draw: six 64x32 sprites of the sprite engine make a 384-pixel bar,
@@ -57,8 +57,9 @@ main:
         sta $DAE8,x
         inx
         bne :-
-        lda #6                          ; border = bar colour
+        lda #0                          ; black border
         sta $D020
+        lda #6                          ; blue bar background
         sta $D021
         PRINT_AT 1, title
 
