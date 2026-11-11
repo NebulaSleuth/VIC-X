@@ -62,18 +62,23 @@ main:
         sta $D021
         PRINT_AT 1, title
 
-        ; the window's top/bottom extension on this machine: PAL 35/37,
-        ; NTSC 23/12 (VICE's normal border; the window stops there)
+        ; the window's top/bottom extension on this machine.  PAL: 35/37,
+        ; the whole visible frame.  NTSC: the bottom stops after 12 lines, at
+        ; the last raster line (the lines below belong to the next frame), so
+        ; the top is kept to 12 as well and the picture stays centred.
         lda $02A6
         beq @ntsc
+        lda #$FF                        ; stops at the visible edge (35)
+        sta top_reg
         lda #35
         sta top
         lda #0                          ; wide: map rows 0-271 = the frame
         sta syw
         jmp @std
-@ntsc:  lda #23
+@ntsc:  lda #12
+        sta top_reg
         sta top
-        lda #ART_ROWS - (23 + 200 + 12) ; wide: the bottom 235 map rows
+        lda #ART_ROWS - (12 + 200 + 12) ; wide: the bottom 224 map rows
         sta syw
 @std:   clc                             ; normal: the same scene, shifted by top
         lda syw
@@ -343,9 +348,12 @@ set_top_bottom:
         VICX_P0_SET VICX_WIDE_TOP, VICX_STEP_1
         lda wide
         beq :+
-        lda #$FF
+        lda top_reg
 :       sta VICX_P0_DATA                ; top
-        sta VICX_P0_DATA                ; bottom
+        lda wide
+        beq :+
+        lda #$FF
+:       sta VICX_P0_DATA                ; bottom (stops at the visible edge)
         rts
 
 set_left_right:
@@ -389,7 +397,8 @@ frame:   .res 1
 wide:    .res 1
 step:    .res 1
 timer:   .res 1
-top:     .res 1
+top:     .res 1                 ; top extension in force when wide
+top_reg: .res 1                 ; value written for it
 syn:     .res 1                 ; scroll Y in normal mode (syn, syw: in this order)
 syw:     .res 1                 ; scroll Y in wide mode
 t16:     .res 2
