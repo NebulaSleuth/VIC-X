@@ -12,8 +12,10 @@ Extension Spec". This repository holds everything that is not emulator code:
 | Path               | Contents |
 |--------------------|----------|
 | `include/vicx.inc` | ca65 register names, bits, step codes and macros |
+| `include/vicxlib.inc` | ca65 helper macros: ports, palette, layers, sprites, DMA |
 | `tests/`           | conformance test programs (ca65) and their runner |
-| `tools/`           | developer tools (PNG to tiles/palette converter, later) |
+| `demos/`           | demos from the spec's demo plan (see `demos/README.md`) |
+| `tools/`           | developer tools: PNG converter, demo art generator |
 | `hdl/`             | the VHDL block (later) |
 
 The reference model is a VICE fork, `vice-vicx` (branch `vicx`, from VICE
@@ -21,7 +23,8 @@ The reference model is a VICE fork, `vice-vicx` (branch `vicx`, from VICE
 
 ## Status
 
-Spec steps 1 to 5 are implemented in the fork and covered by the tests.
+Spec steps 1 to 5 are implemented in the fork and covered by the tests;
+step 6 has its first three demos.
 
 Step 1:
 
@@ -93,7 +96,16 @@ Step 5:
 
 Palette changes still take effect per frame, not mid-frame.
 
-Next: spec step 6, the conformance suite on hardware and the first demos.
+Step 6 (first part):
+
+- demos `parallax`, `bullets` and `gallery` with a CPU-time meter, built
+  from generated art through the PNG converter (`demos/`, `tools/`)
+- sprite hit masks (entry +7 bits 0-3), added when the bullet storm showed
+  that shared group bits cannot keep bullets from colliding with each other
+
+Next: the remaining demos (Big world; Any sixteen colours and Nothing
+breaks need outside software), and running the tests on FPGA simulation
+and hardware.
 
 ## Building the fork
 
