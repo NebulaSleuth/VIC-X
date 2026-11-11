@@ -52,13 +52,42 @@ default place):
     python build.py --prep          # first remake art/*.png from art/raw/
     python build.py --check --ntsc  # screenshots on an NTSC machine
 
+## Disk images: the demos load themselves
+
+`build.py` also makes a disk image per demo, with the demo first (so it
+autostarts) and its data file: a D64 (1541) when it fits, a D81 (1581) for
+`gallery` and `bigworld`. The data is packed in 8 KB blocks
+(`../tools/lzpack.py`); the demo reads it with the KERNAL from the drive it
+was loaded from, unpacks each block and DMAs it into XRAM, with a progress
+bar. That works on any machine with VIC-X and an REU of 2 MB or more: VICE,
+a MiSTer or an Ultimate, from a real drive or a disk image. If XRAM already
+holds the demo's data (an REU image loaded with it, or an earlier run), it
+starts at once.
+
+| Demo | Disk | Packed data | Load time at standard 1541 speed |
+|------|------|-------------|----------------------------------|
+| `sixteen` | D64 | 14 KB | about 40 seconds |
+| `parallax` | D64 | 44 KB | about 2 minutes (measured in VICE) |
+| `wide` | D64 | 52 KB | about 2.5 minutes |
+| `bullets` | D64 | 59 KB | about 2.5 minutes |
+| `gallery` | D81 | 265 KB | about 12 minutes |
+| `bigworld` | D81 | 453 KB | about 20 minutes |
+
+The KERNAL loads about 380 bytes a second from a stock drive. Anything that
+speeds up the KERNAL (JiffyDOS, a speeder cartridge, VICE's warp) speeds up
+these loads too; a fast loader or the Ultimate's own file access would be
+the next step for real hardware.
+
+    D:/Repos/vice-vicx/vice/build-ucrt64/src/x64sc.exe -directory D:/Repos/vice-vicx/vice/data -vicx -reu -reusize 2048 -autostart D:/Repos/VIC-X/demos/build/parallax.d64
+
 ## Running
 
 In the GTK build of the VICE fork, from an MSYS2 UCRT64 shell (any folder):
 
     D:/Repos/vice-vicx/vice/build-ucrt64/src/x64sc.exe -directory D:/Repos/vice-vicx/vice/data -vicx -reu -reusize 2048 -reuimage D:/Repos/VIC-X/demos/build/parallax.reu -autostartprgmode 1 -autostart D:/Repos/VIC-X/demos/build/parallax.prg
 
-Replace both `parallax` with `bullets` or `gallery`. Add `-ntsc` for an NTSC
+Replace both `parallax` with any other demo's name. This loads the data
+instantly from the REU image, without the disk. Add `-ntsc` for an NTSC
 C64 (about 60 Hz): on a 60 Hz monitor that scrolls more smoothly than PAL's
 50 Hz, which VICE has to show unevenly. NTSC frames are shorter, so the same
 work shows as a higher CPU percentage (bullets: about 49% PAL, 74% NTSC).

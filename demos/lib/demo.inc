@@ -1,7 +1,9 @@
 ; demo.inc - start-up and helpers shared by the VIC-X demos
 ;
 ; A demo defines `main', `NEED_XRAM_MB' (0 if it needs no XRAM) and
-; `CPU_TEXT' (where the CPU load readout goes).  Start-up
+; `CPU_TEXT' (where the CPU load readout goes), and includes its generated
+; assets.inc, which names its data file.  Before `main', start-up loads that
+; file into XRAM, unless XRAM already holds the demo's data.  Start-up
 ; runs with interrupts off, unlocks VIC-X and checks it is there; if not, it
 ; prints what to do and stops.
 
@@ -41,6 +43,7 @@
         sta cpu_max
         sta cpu_max + 1
         sta cpu_frames
+        jsr load_data
         jmp main
 @novicx:
         ldx #<msg_novicx
@@ -328,4 +331,373 @@ cpu_max:    .res 2
 cpu_num:    .res 2
 cpu_div:    .res 2
 cpu_frames: .res 1
+.popseg
+
+; --- self-loading ---------------------------------------------------------
+; The demo's data file (data_name in assets.inc) is on the disk the demo was
+; loaded from: "VX", then blocks of [packed size (2), XRAM address (3),
+; unpacked size (2), packed bytes], then a packed size of 0.  Each block is
+; read with the KERNAL into LD_IN, unpacked (tools/lzpack.py's format) into
+; LD_OUT, and copied into XRAM by DMA.  If the 16 bytes at SIG_XRAM already
+; match the demo's signature (an REU image loaded with the demo, or an
+; earlier run), there is nothing to load.
+
+LD_IN   = $3000                 ; packed block (up to ~8.2 KB)
+LD_OUT  = $6000                 ; unpacked block (8 KB)
+ld_src  = $F0                   ; zero-page pointers
+ld_dst  = $F2
+ld_ref  = $F4
+ld_cnt  = $F6
+SETNAM  = $FFBD
+SETLFS  = $FFBA
+OPEN    = $FFC0
+CLOSE   = $FFC3
+CHKIN   = $FFC6
+CLRCHN  = $FFCC
+CHRIN   = $FFCF
+STATUS  = $90
+LAST_DEVICE = $BA
+
+load_data:
+        XRAM_TO_C64 SIG_XRAM, ld_sig, 16
+        ldx #15
+:       lda ld_sig,x
+        cmp demo_sig,x
+        bne ld_go
+        dex
+        bpl :-
+        rts                             ; already there
+
+ld_go:  jsr ld_screen
+        lda #DATA_NAME_LEN
+        ldx #<data_name
+        ldy #>data_name
+        jsr SETNAM
+        lda #2
+        ldx LAST_DEVICE
+        bne :+
+        ldx #8
+:       ldy #2
+        jsr SETLFS
+        jsr OPEN
+        bcc :+
+        jmp ld_err
+:
+        ldx #2
+        jsr CHKIN
+        bcc :+
+        jmp ld_err
+:
+        jsr CHRIN                       ; "VX"
+        cmp #$56
+        beq :+
+        jmp ld_err
+:
+        jsr CHRIN
+        cmp #$58
+        beq :+
+        jmp ld_err
+:
+        lda #0
+        sta ld_acc
+        sta ld_col
+
+ld_block:
+        jsr CHRIN                       ; packed size, 0 = end
+        sta ld_csize
+        jsr CHRIN
+        sta ld_csize + 1
+        ora ld_csize
+        beq ld_done
+        jsr CHRIN                       ; XRAM address
+        sta ld_xaddr
+        jsr CHRIN
+        sta ld_xaddr + 1
+        jsr CHRIN
+        sta ld_xaddr + 2
+        jsr CHRIN                       ; unpacked size
+        sta ld_raw
+        jsr CHRIN
+        sta ld_raw + 1
+        lda #<LD_IN                     ; read the packed bytes
+        sta ld_dst
+        lda #>LD_IN
+        sta ld_dst + 1
+        lda ld_csize
+        sta ld_cnt
+        lda ld_csize + 1
+        sta ld_cnt + 1
+ld_rd:  jsr CHRIN
+        ldy #0
+        sta (ld_dst),y
+        inc ld_dst
+        bne :+
+        inc ld_dst + 1
+:       lda ld_cnt
+        bne :+
+        dec ld_cnt + 1
+:       dec ld_cnt
+        lda ld_cnt
+        ora ld_cnt + 1
+        bne ld_rd
+        lda STATUS                      ; device missing, timeouts
+        and #%10000011
+        beq :+
+        jmp ld_err
+:
+        jsr lz_unpack
+        jsr ld_store
+        jsr ld_progress
+        jmp ld_block
+
+ld_done:
+        jsr CLRCHN
+        lda #2
+        jsr CLOSE
+        ; the signature last: only a complete load counts
+        DMA_DESC 0, VICX_DMA_COPY, VICX_DMA_SRC_C64 | VICX_DMA_DST_XRAM, demo_sig, SIG_XRAM, 16, 0, 0, 0, 0, 0, VICX_DMA_NONE
+        lda #0
+        sta VICX_DMA_CMD
+        rts
+
+ld_err: jsr CLRCHN
+        lda #2
+        jsr CLOSE
+        ldx #<msg_loaderr
+        ldy #>msg_loaderr
+        jmp demo_fail
+
+; DMA LD_OUT (ld_raw bytes) to XRAM ld_xaddr; the CPU waits while it runs.
+ld_store:
+        VICX_P0_SET VICX_DMADESC, VICX_STEP_1
+        lda #VICX_DMA_COPY
+        sta VICX_P0_DATA
+        lda #VICX_DMA_SRC_C64 | VICX_DMA_DST_XRAM
+        sta VICX_P0_DATA
+        lda #<LD_OUT
+        sta VICX_P0_DATA
+        lda #>LD_OUT
+        sta VICX_P0_DATA
+        lda #0
+        sta VICX_P0_DATA
+        sta VICX_P0_DATA
+        lda ld_xaddr
+        sta VICX_P0_DATA
+        lda ld_xaddr + 1
+        sta VICX_P0_DATA
+        lda ld_xaddr + 2
+        sta VICX_P0_DATA
+        lda #0
+        sta VICX_P0_DATA
+        lda ld_raw
+        sta VICX_P0_DATA
+        lda ld_raw + 1
+        sta VICX_P0_DATA
+        lda #0
+        ldx #8
+:       sta VICX_P0_DATA
+        dex
+        bne :-
+        lda #VICX_DMA_NONE
+        sta VICX_P0_DATA
+        lda #0
+        sta VICX_DMA_CMD
+        rts
+
+; Unpack LD_IN into LD_OUT (ld_raw bytes).
+lz_unpack:
+        lda #<LD_IN
+        sta ld_src
+        lda #>LD_IN
+        sta ld_src + 1
+        lda #<LD_OUT
+        sta ld_dst
+        lda #>LD_OUT
+        sta ld_dst + 1
+        clc
+        lda #<LD_OUT
+        adc ld_raw
+        sta ld_end
+        lda #>LD_OUT
+        adc ld_raw + 1
+        sta ld_end + 1
+lz_tok: jsr lz_get                      ; token
+        sta ld_tok
+        lsr
+        lsr
+        lsr
+        lsr
+        sta ld_cnt                      ; literal count
+        lda #0
+        sta ld_cnt + 1
+        lda ld_cnt
+        cmp #15
+        bne :+
+        jsr lz_ext
+:       lda ld_cnt
+        ora ld_cnt + 1
+        beq lz_lend
+lz_lit: jsr lz_get                      ; copy the literals
+        ldy #0
+        sta (ld_dst),y
+        inc ld_dst
+        bne :+
+        inc ld_dst + 1
+:       lda ld_cnt
+        bne :+
+        dec ld_cnt + 1
+:       dec ld_cnt
+        lda ld_cnt
+        ora ld_cnt + 1
+        bne lz_lit
+lz_lend:
+        lda ld_dst + 1                  ; output full?
+        cmp ld_end + 1
+        bcc lz_match
+        lda ld_dst
+        cmp ld_end
+        bcc lz_match
+        rts
+lz_match:
+        jsr lz_get                      ; offset back from the output end
+        sta ld_ref
+        jsr lz_get
+        sta ld_ref + 1
+        sec
+        lda ld_dst
+        sbc ld_ref
+        sta ld_ref
+        lda ld_dst + 1
+        sbc ld_ref + 1
+        sta ld_ref + 1
+        lda ld_tok                      ; match length - 3
+        and #15
+        sta ld_cnt
+        lda #0
+        sta ld_cnt + 1
+        lda ld_cnt
+        cmp #15
+        bne :+
+        jsr lz_ext
+:       clc
+        lda ld_cnt
+        adc #3
+        sta ld_cnt
+        bcc :+
+        inc ld_cnt + 1
+:       ldy #0
+lz_copy:
+        lda (ld_ref),y
+        sta (ld_dst),y
+        inc ld_ref
+        bne :+
+        inc ld_ref + 1
+:       inc ld_dst
+        bne :+
+        inc ld_dst + 1
+:       lda ld_cnt
+        bne :+
+        dec ld_cnt + 1
+:       dec ld_cnt
+        lda ld_cnt
+        ora ld_cnt + 1
+        bne lz_copy
+        jmp lz_tok
+
+lz_get: ldy #0
+        lda (ld_src),y
+        inc ld_src
+        bne :+
+        inc ld_src + 1
+:       rts
+
+; add extension bytes to ld_cnt until one is below 255
+lz_ext: jsr lz_get
+        pha
+        clc
+        adc ld_cnt
+        sta ld_cnt
+        bcc :+
+        inc ld_cnt + 1
+:       pla
+        cmp #255
+        beq lz_ext
+        rts
+
+; the loading screen: the file's name, and a 32-character bar on row 12
+ld_screen:
+        lda #0
+        sta $D020
+        sta $D021
+        ldx #0
+:       lda #$20
+        sta $0400,x
+        sta $0500,x
+        sta $0600,x
+        sta $06E8,x
+        lda #1
+        sta $D800,x
+        sta $D900,x
+        sta $DA00,x
+        sta $DAE8,x
+        inx
+        bne :-
+        ldx #0
+:       lda msg_loading,x
+        beq :+
+        and #$3F
+        sta $0400 + 10 * 40 + 4,x
+        inx
+        bne :-
+:       ldx #0
+:       lda data_name,x
+        cmp #$2C                        ; ','
+        beq :+
+        and #$3F
+        sta $0400 + 10 * 40 + 23,x
+        inx
+        cpx #DATA_NAME_LEN
+        bne :-
+:       ldx #31
+        lda #$2E                        ; '.'
+:       sta $0400 + 12 * 40 + 4,x
+        dex
+        bpl :-
+        rts
+
+; one more block done: fill the bar in proportion (32 * blocks / total)
+ld_progress:
+        clc
+        lda ld_acc
+        adc #32
+        sta ld_acc
+:       lda ld_acc
+        cmp #DATA_BLOCKS
+        bcc :+
+        sbc #DATA_BLOCKS
+        sta ld_acc
+        ldx ld_col
+        lda #$A0                        ; reverse space
+        sta $0400 + 12 * 40 + 4,x
+        inc ld_col
+        bne :-
+:       rts
+
+msg_loading:
+        .byte "LOADING DEMO DATA:", 0
+msg_loaderr:
+        .byte "COULD NOT LOAD THE DEMO DATA.", 13, 13
+        .byte "THE DATA FILE MUST BE ON THE SAME DISK", 13
+        .byte "AS THE DEMO.", 0
+
+.pushseg
+.bss
+ld_sig:   .res 16
+ld_csize: .res 2
+ld_xaddr: .res 3
+ld_raw:   .res 2
+ld_end:   .res 2
+ld_tok:   .res 1
+ld_acc:   .res 1
+ld_col:   .res 1
 .popseg

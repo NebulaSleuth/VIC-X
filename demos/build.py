@@ -11,6 +11,11 @@ the Nano Banana pictures in art/raw/ by ../tools/prep_art.py (run again with
 --prep after changing them); the bullet sprites come from ../tools/gen_art.py.  Run one in the GTK fork with:
 
   x64sc -vicx -reu -reusize 2048 -reuimage build/<demo>.reu build/<demo>.prg
+
+or from its disk image (build/<demo>.d64 or .d81), where the demo loads its
+own data into XRAM before it starts:
+
+  x64sc -vicx -reu -reusize 2048 build/<demo>.d64
 """
 
 import argparse
@@ -20,6 +25,9 @@ import os
 import subprocess
 import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "tools"))
+import lzpack  # noqa: E402
 
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parent
@@ -33,6 +41,10 @@ X64SC = os.environ.get("VICX_X64SC", r"D:\Repos\vice-vicx\vice\build-headless\sr
 DLLDIR = os.environ.get("VICX_DLLDIR", r"C:\msys64\ucrt64\bin")
 
 REU_SIZE = 2 * 1024 * 1024          # -reusize 2048
+SIG_XRAM = REU_SIZE - 16            # the demo's signature once its data is in XRAM
+BLOCK = 8192                        # data file blocks (unpacked size)
+C1541 = os.environ.get("VICX_C1541", r"D:\Repos\vice-vicx\vice\build-headless\src\c1541.exe")
+D64_BYTES = 664 * 254               # free space on a 1541 disk
 
 # (png, folder) -> converter arguments
 CONVERSIONS = [
@@ -131,7 +143,33 @@ def pack(demo, assets):
         image[pos:pos + len(data)] = data
         lines.append(f"{sym:<14}= ${pos:06X}")
         lines.append(f"{sym + '_LEN':<14}= {len(data)}")
+        end = pos + len(data)
         pos = (pos + len(data) + 0xFF) & ~0xFF
+
+    # the data file for loading from disk: the used part of the image, in
+    # packed 8 KB blocks
+    out = bytearray(b"VX")
+    blocks = 0
+    for a in range(0, end, BLOCK):
+        raw = bytes(image[a:min(a + BLOCK, end)])
+        packed = lzpack.pack(raw)
+        out += len(packed).to_bytes(2, "little") + a.to_bytes(3, "little")
+        out += len(raw).to_bytes(2, "little") + packed
+        blocks += 1
+    out += b"\0\0"
+    if blocks > 223:
+        raise SystemExit(f"{demo}: {blocks} blocks; the progress bar handles up to 223")
+    (BUILD / f"{demo}.dat").write_bytes(out)
+
+    sig = f"VIC-X {demo.upper()}".ljust(16)[:16].encode("ascii")
+    image[SIG_XRAM:SIG_XRAM + 16] = sig        # a preloaded image needs no loading
+    name = f"{demo.upper()}.DAT"
+    lines += ["", f"SIG_XRAM      = ${SIG_XRAM:06X}", f"DATA_BLOCKS   = {blocks}",
+              f"DATA_NAME_LEN = {len(name) + 4}",
+              ".pushseg", ".rodata",
+              f'data_name:    .byte "{name},S,R"',
+              f'demo_sig:     .byte "{sig.decode()}"',
+              ".popseg"]
     (BUILD / f"{demo}.reu").write_bytes(image)
     inc = BUILD / demo
     inc.mkdir(exist_ok=True)
@@ -163,6 +201,21 @@ def assemble(demo):
          "-o", obj, HERE / f"{demo}.s"])
     run([Path(CC65) / "ld65", "-C", HERE / "lib" / "demo.cfg", "-o", prg, obj])
     return prg
+
+
+def disk(demo, prg):
+    """build/<demo>.d64 (or .d81 when the data needs more than a 1541 disk):
+    the PRG first, so it autostarts, then the data file."""
+    dat = BUILD / f"{demo}.dat"
+    kind = "d64" if prg.stat().st_size + dat.stat().st_size < D64_BYTES - 2048 else "d81"
+    image = BUILD / f"{demo}.{kind}"
+    for old in (BUILD / f"{demo}.d64", BUILD / f"{demo}.d81"):
+        old.unlink(missing_ok=True)
+    env = dict(os.environ)
+    env["PATH"] = DLLDIR + os.pathsep + env.get("PATH", "")
+    run([C1541, "-format", f"vic-x {demo},vx", kind, image,
+         "-write", prg, demo, "-write", dat, f"{demo}.dat,s"], stdout=subprocess.DEVNULL, env=env)
+    return image
 
 
 def check(demo, prg, cycles, ntsc=False):
@@ -197,7 +250,9 @@ def main():
     for demo in args.demos or DEMOS:
         used = pack(demo, DEMOS[demo])
         prg = assemble(demo)
-        print(f"{demo}: {prg.name}, {prg.stat().st_size} bytes; {demo}.reu uses {used} bytes")
+        image = disk(demo, prg)
+        print(f"{demo}: {prg.name}, {prg.stat().st_size} bytes; {demo}.reu uses {used} bytes; "
+              f"{image.name} with {(BUILD / f'{demo}.dat').stat().st_size} bytes of packed data")
         if args.check:
             print(f"  screenshot: {check(demo, prg, args.cycles, args.ntsc)}")
 

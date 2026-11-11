@@ -9,6 +9,7 @@ Developer tools for VIC-X. Python 3; standard library only, except
 | `nanobanana.py` | generates a picture with Google's Nano Banana models (Gemini image API; key from `GEMINI_API_KEY`) |
 | `prep_art.py` | turns the generated pictures into VIC-X-ready PNGs for the demos (needs Pillow) |
 | `gen_art.py`  | draws procedural demo art (the bullets; the other pictures are fallbacks) |
+| `lzpack.py`   | an LZ77 packer for data the demos unpack on the 6502 (LZ4-style tokens, 8 KB blocks) |
 | `pngio.py`    | the PNG reader and writer both use |
 
 ## png2vicx
