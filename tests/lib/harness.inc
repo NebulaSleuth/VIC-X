@@ -229,3 +229,63 @@ inner:  lda #<(value)
         lda #0
         sta VICX_P0_DATA
 .endmacro
+
+; Write the first 21 bytes of DMA descriptor n.  Uses A.
+.macro DMA_DESC n, op, flags, src, dst, len, height, sstride, dstride, fill, trans, next
+        VICX_P0_SET VICX_DMADESC + (n) * 32, VICX_STEP_1
+        lda #(op)
+        sta VICX_P0_DATA
+        lda #(flags)
+        sta VICX_P0_DATA
+        lda #<(src)
+        sta VICX_P0_DATA
+        lda #>(src)
+        sta VICX_P0_DATA
+        lda #(((src) >> 16) & $FF)
+        sta VICX_P0_DATA
+        lda #(((src) >> 24) & $FF)
+        sta VICX_P0_DATA
+        lda #<(dst)
+        sta VICX_P0_DATA
+        lda #>(dst)
+        sta VICX_P0_DATA
+        lda #(((dst) >> 16) & $FF)
+        sta VICX_P0_DATA
+        lda #(((dst) >> 24) & $FF)
+        sta VICX_P0_DATA
+        lda #<(len)
+        sta VICX_P0_DATA
+        lda #>(len)
+        sta VICX_P0_DATA
+        lda #<(height)
+        sta VICX_P0_DATA
+        lda #>(height)
+        sta VICX_P0_DATA
+        lda #<(sstride)
+        sta VICX_P0_DATA
+        lda #>(sstride)
+        sta VICX_P0_DATA
+        lda #<(dstride)
+        sta VICX_P0_DATA
+        lda #>(dstride)
+        sta VICX_P0_DATA
+        lda #(fill)
+        sta VICX_P0_DATA
+        lda #(trans)
+        sta VICX_P0_DATA
+        lda #(next)
+        sta VICX_P0_DATA
+.endmacro
+
+; Wait until the DMA engine is idle.  Uses A.
+.macro DMA_WAIT
+        .local w
+w:      lda VICX_DMA_CMD
+        bmi w
+.endmacro
+
+; Read the byte at a port address into A.
+.macro PEEK_AT addr
+        VICX_P0_SET addr, VICX_STEP_0
+        lda VICX_P0_DATA
+.endmacro

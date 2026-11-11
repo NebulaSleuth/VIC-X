@@ -21,7 +21,7 @@ The reference model is a VICE fork, `vice-vicx` (branch `vicx`, from VICE
 
 ## Status
 
-Spec steps 1 to 4 are implemented in the fork and covered by the tests.
+Spec steps 1 to 5 are implemented in the fork and covered by the tests.
 
 Step 1:
 
@@ -79,10 +79,21 @@ Wide window (added after step 4):
 - in the widened part, border pixels are background (transparent with CTRL
   bit 4); over the 320x200 area the border stays on top
 
-Not yet: DMA and the XRAM windows (step 5). Palette changes still take
-effect per frame, not mid-frame.
+Step 5:
 
-Next: spec step 5, DMA and the XRAM windows.
+- XRAM is the REU's memory (run VICE with `-reu -reusize 16384` for 16 MB);
+  CAP_XRAM reports its size in MB
+- two 8 KB CPU windows (`$D054-$D059`) at `$2000`-`$A000` or `$E000`, over
+  RAM and ROM whatever `$01` says; code runs from them
+- the DMA engine (`$D05A`, descriptors at `$20880`): copy, fill and masked
+  copy between C64 RAM, VRAM and the register space, and XRAM, straight or
+  2D, chained; background transfers keep DMA_CMD busy, transfers touching
+  C64 RAM halt the CPU; IRQ_STAT bit 1 when a chain ends
+- CAP_FEAT $1F
+
+Palette changes still take effect per frame, not mid-frame.
+
+Next: spec step 6, the conformance suite on hardware and the first demos.
 
 ## Building the fork
 
@@ -142,6 +153,8 @@ options and environment variables.
 | `t24_collisions`   | collision list, group masks, transparency, IRQ_STAT bit 0 and the CPU IRQ |
 | `t25_wide`         | full-size wide window: layer and sprite in the border, origin, border on top over 320x200 |
 | `t26_wide_split`   | partly widened window, left edge split per line, top edge, layer in front |
+| `t27_windows`      | XRAM windows: CAP_XRAM, paging, REU sharing, priority over ROM, slot rules, code in a window |
+| `t28_dma`          | DMA: fill, copy, masked 2D, chains, busy, IRQ bit, register space, start while busy, length 0 |
 
 ### Stock compatibility
 

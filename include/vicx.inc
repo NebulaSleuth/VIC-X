@@ -155,6 +155,44 @@ VICX_WIDE_RIGHT  = VICX_MIXSETUP + 3    ; pixels, latched per line
 VICX_WIDE_TOP    = VICX_MIXSETUP + 4    ; lines, latched per frame
 VICX_WIDE_BOTTOM = VICX_MIXSETUP + 5    ; lines, latched per frame
 
+; --- CPU windows ($D054-$D059) ---------------------------------------
+; Wn_PAGEL/H: 8 KB page of XRAM (11 bits).  Wn_SLOT: slot code | VICX_SLOT_ON.
+; XRAM is the REU's memory; CAP_XRAM gives its size in MB.
+VICX_SLOT_2000  = 0
+VICX_SLOT_4000  = 1
+VICX_SLOT_6000  = 2
+VICX_SLOT_8000  = 3
+VICX_SLOT_A000  = 4
+VICX_SLOT_E000  = 5             ; codes 6 and 7 are not allowed: window off
+VICX_SLOT_ON    = $80
+
+; --- DMA descriptor (32 bytes at VICX_DMADESC + n * 32) ---------------
+VICX_D_OP       = 0             ; VICX_DMA_COPY / _FILL / _MASKED
+VICX_D_FLAGS    = 1             ; source and destination space, 2D, IRQ
+VICX_D_SRC      = 2             ; +2-+5
+VICX_D_DST      = 6             ; +6-+9
+VICX_D_LEN      = 10            ; +10-+11 length, or width when 2D (0 = nothing)
+VICX_D_HEIGHT   = 12            ; +12-+13 rows when 2D
+VICX_D_SSTRIDE  = 14            ; +14-+15
+VICX_D_DSTRIDE  = 16            ; +16-+17
+VICX_D_FILL     = 18
+VICX_D_TRANS    = 19
+VICX_D_NEXT     = 20            ; next descriptor 0-3, or VICX_DMA_NONE
+
+VICX_DMA_COPY     = 0
+VICX_DMA_FILL     = 1
+VICX_DMA_MASKED   = 2
+VICX_DMA_SRC_C64  = $00         ; C64 RAM (64 KB, never ROM or I/O)
+VICX_DMA_SRC_VRAM = $01         ; the port address space: VRAM and registers
+VICX_DMA_SRC_XRAM = $02
+VICX_DMA_DST_C64  = $00
+VICX_DMA_DST_VRAM = $04
+VICX_DMA_DST_XRAM = $08
+VICX_DMA_2D       = $10
+VICX_DMA_IRQ      = $20         ; raise IRQ_STAT bit 1 when the chain ends
+VICX_DMA_NONE     = $FF
+VICX_DMA_BUSY     = $80         ; DMA_CMD read
+
 ; --- Sprite table entry (8 bytes at VICX_SPRITES + n * 8) ---------------
 VICX_S_XL       = 0             ; X bits 0-7 (display-window pixels)
 VICX_S_XH       = 1             ; bits 0-1 X 8-9, 2-3 width, 4-5 height, 6 flip X, 7 flip Y

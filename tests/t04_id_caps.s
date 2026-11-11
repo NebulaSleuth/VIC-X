@@ -2,9 +2,9 @@
 ; registers and the frame counter.
 ;
 ; Values in the VICE model: VERSION $01 (spec 0.1 draft), CAP_VRAM $10
-; (128 KB), CAP_SPR $80 and CAP_SPRLINE $20 (the target limits), CAP_FEAT $07
-; (tiles, bitmaps, sprites since step 4).  XRAM, the blitter and the
-; windows stay 0 until step 5.
+; (128 KB), CAP_SPR $80 and CAP_SPRLINE $20 (the target limits), CAP_FEAT $1F
+; (all features since step 5).  CAP_XRAM is the REU size in MB: 0 here,
+; since this run has no REU (t27 checks it with one).
 ;
 ; RUN: -vicx
 
@@ -20,7 +20,7 @@ main:
         EXPECT VICX_CAP_XRAM,    $00, 6
         EXPECT VICX_CAP_SPR,     $80, 7
         EXPECT VICX_CAP_SPRLINE, $20, 8
-        EXPECT VICX_CAP_FEAT,    VICX_FEAT_TILES | VICX_FEAT_BITMAP | VICX_FEAT_SPRITES, 9
+        EXPECT VICX_CAP_FEAT,    VICX_FEAT_TILES | VICX_FEAT_BITMAP | VICX_FEAT_SPRITES | VICX_FEAT_BLITTER | VICX_FEAT_WINDOWS, 9
 
         ; ID and capabilities are read-only
         lda #$12
