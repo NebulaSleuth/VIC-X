@@ -12,10 +12,11 @@
 ; Each frame, at line 251 (after the display window), DMA copies the 1 KB
 ; sprite table built in C64 RAM during the previous frame to $20400; the
 ; engine latches it at the start of the next frame.  Then the CPU moves
-; every bullet for the frame after; the border is red while it does (the
-; CPU-time meter).
+; every bullet for the frame after.  The bottom row shows the CPU load, DMA
+; halts included.
 
 NEED_XRAM_MB = 2
+CPU_TEXT     = $0400 + 24 * 40      ; bottom row
 .include "demo.inc"
 .include "assets.inc"
 .include "tables.inc"           ; vx_lo/vx_hi/vy_lo/vy_hi: speed x cos/sin, 8.8
@@ -149,9 +150,9 @@ main:
 loop:
         ldx #251
         jsr wait_line
+        jsr cpu_start
         lda #1                          ; table built last frame -> engine
         sta VICX_DMA_CMD
-        METER 2
 
         ; a ship hit in the frame that just ended?
         PEEK_AT VICX_COLLIST
@@ -297,7 +298,7 @@ loop:
         jmp @bullet
 :
         inc base_angle
-        METER 0
+        jsr cpu_end
         jmp loop
 
 ptr_next:

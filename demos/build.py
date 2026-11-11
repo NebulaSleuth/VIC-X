@@ -122,8 +122,8 @@ def assemble(demo):
     return prg
 
 
-def check(demo, prg, cycles):
-    shot = BUILD / f"{demo}-check.png"
+def check(demo, prg, cycles, ntsc=False):
+    shot = BUILD / f"{demo}-check{'-ntsc' if ntsc else ''}.png"
     env = dict(os.environ)
     env["PATH"] = DLLDIR + os.pathsep + env.get("PATH", "")
     data = Path(X64SC).parents[2] / "data"
@@ -131,6 +131,8 @@ def check(demo, prg, cycles):
            "-directory", data, "-vicx", "-reu", "-reusize", "2048",
            "-reuimage", BUILD / f"{demo}.reu", "-limitcycles", str(cycles),
            "-exitscreenshot", shot, "-autostart", prg]
+    if ntsc:
+        cmd[2:2] = ["-ntsc"]          # after -default, which would reset it
     subprocess.run([str(c) for c in cmd], env=env, capture_output=True, cwd=BUILD, timeout=600)
     return shot
 
@@ -140,6 +142,7 @@ def main():
     ap.add_argument("demos", nargs="*", help="demos to build (default: all)")
     ap.add_argument("--check", action="store_true", help="run each demo headless and save a screenshot")
     ap.add_argument("--cycles", type=int, default=12000000, help="cycles to run for --check")
+    ap.add_argument("--ntsc", action="store_true", help="run --check as an NTSC machine")
     ap.add_argument("--skip-art", action="store_true", help="reuse the converted art in build/")
     ap.add_argument("--prep", action="store_true",
                     help="remake art/*.png from art/raw/ first (needs Pillow)")
@@ -153,7 +156,7 @@ def main():
         prg = assemble(demo)
         print(f"{demo}: {prg.name}, {prg.stat().st_size} bytes; {demo}.reu uses {used} bytes")
         if args.check:
-            print(f"  screenshot: {check(demo, prg, args.cycles)}")
+            print(f"  screenshot: {check(demo, prg, args.cycles, args.ntsc)}")
 
 
 if __name__ == "__main__":

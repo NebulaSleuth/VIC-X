@@ -7,10 +7,11 @@
 ; the scroll registers just count up and the map wraps.  The artwork was
 ; made with Nano Banana (see art/).  The VIC-II's text rows
 ; 0-2 are a score bar: CTRL bit 4 is off for those lines (raster split), so
-; the VIC-II background covers the layers there, and on below.
-; The border turns red while the CPU works each frame (the CPU-time meter).
+; the VIC-II background covers the layers there, and on below.  The bar
+; also shows the CPU load: the share of each frame the demo's own code uses.
 
 NEED_XRAM_MB = 2
+CPU_TEXT     = $0400 + 1 * 40 + 16  ; in the score bar
 .include "demo.inc"
 .include "assets.inc"
 
@@ -77,7 +78,7 @@ loop:
 
         ldx #251                        ; below the display window
         jsr wait_line
-        METER 2
+        jsr cpu_start
 
         ; front layer: 1 pixel per frame
         inc front_x
@@ -134,7 +135,7 @@ loop:
         dey
         bpl :-
 
-        METER 0
+        jsr cpu_end
         jmp loop
 
 .rodata

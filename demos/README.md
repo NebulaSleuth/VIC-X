@@ -1,8 +1,9 @@
 # VIC-X demos
 
-Three of the six demos in the spec's demo plan. Each shows a CPU-time meter:
-the border turns red while the CPU works on a frame, so the height of the
-red band is the CPU time VIC-X leaves the program.
+Three of the six demos in the spec's demo plan. Each shows its CPU load as
+"CPU nn%": the share of each frame the demo's own code uses (the busiest of
+every 16 frames, measured with the raster line), so you can see how little
+the CPU has to do while VIC-X does the work.
 
 | Demo | What it shows | Features |
 |------|---------------|----------|
@@ -46,6 +47,7 @@ default place):
     python build.py gallery         # one demo
     python build.py --check         # also take a headless screenshot of each
     python build.py --prep          # first remake art/*.png from art/raw/
+    python build.py --check --ntsc  # screenshots on an NTSC machine
 
 ## Running
 
@@ -53,7 +55,10 @@ In the GTK build of the VICE fork, from an MSYS2 UCRT64 shell (any folder):
 
     D:/Repos/vice-vicx/vice/build-ucrt64/src/x64sc.exe -directory D:/Repos/vice-vicx/vice/data -vicx -reu -reusize 2048 -reuimage D:/Repos/VIC-X/demos/build/parallax.reu -autostartprgmode 1 -autostart D:/Repos/VIC-X/demos/build/parallax.prg
 
-Replace both `parallax` with `bullets` or `gallery`.
+Replace both `parallax` with `bullets` or `gallery`. Add `-ntsc` for an NTSC
+C64 (about 60 Hz): on a 60 Hz monitor that scrolls more smoothly than PAL's
+50 Hz, which VICE has to show unevenly. NTSC frames are shorter, so the same
+work shows as a higher CPU percentage (bullets: about 49% PAL, 74% NTSC).
 
 - `-directory` points VICE at its ROMs and keymaps; a build run from its
   build tree does not find them otherwise ("Default keymap not found").

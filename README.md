@@ -98,7 +98,7 @@ Palette changes still take effect per frame, not mid-frame.
 
 Step 6 (first part):
 
-- demos `parallax`, `bullets` and `gallery` with a CPU-time meter, built
+- demos `parallax`, `bullets` and `gallery`, built
   from generated art through the PNG converter (`demos/`, `tools/`)
 - sprite hit masks (entry +7 bits 0-3), added when the bullet storm showed
   that shared group bits cannot keep bullets from colliding with each other

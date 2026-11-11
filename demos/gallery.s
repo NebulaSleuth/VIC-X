@@ -6,10 +6,11 @@
 ; while one is shown, DMA loads the next picture into the other in the
 ; background.  Each picture fades in (one fade level per frame, copied by
 ; DMA into the palette), stays, fades out, and the layer base flips to the
-; other buffer.  The border is red while the CPU works (the CPU-time
-; meter): almost never, since DMA does the copying.
+; other buffer.  DMA does all the copying; the CPU only starts it, as the
+; CPU load on the bottom row shows.
 
 NEED_XRAM_MB = 2
+CPU_TEXT     = $0400 + 24 * 40      ; bottom row
 .include "demo.inc"
 .include "assets.inc"
 
@@ -86,6 +87,12 @@ main:
         LAYER_SET VICX_LAYER0, VICX_LMODE_BITMAP8, 0, BUF0, 0, 0, 0, 320, 0
         lda #VICX_CTRL_L0 | VICX_CTRL_BGTRANS
         sta VICX_CTRL
+        ldx #39                         ; white text on the bottom row
+        lda #1
+:       sta $D800 + 24 * 40,x
+        dex
+        bpl :-
+        jsr cpu_start
 
 show:
         ; fade in
@@ -93,7 +100,6 @@ show:
         sta level
 @in:    jsr frame_start
         jsr set_palette
-        METER 0
         inc level
         lda level
         cmp #LEVELS
@@ -112,7 +118,6 @@ show:
 
         ldy #HOLD
 @hold:  jsr frame_start
-        METER 0
         dey
         bne @hold
 
@@ -121,7 +126,6 @@ show:
         sta level
 @out:   jsr frame_start
         jsr set_palette
-        METER 0
         dec level
         bpl @out
 
@@ -138,12 +142,13 @@ show:
         sta VICX_P0_DATA                ; base bits 16-23: buffer 0 or 1
         jmp show
 
-; Wait for the line after the display window, then start the meter.
+; End the last frame's CPU count, wait for the line after the display
+; window and start the next count.
 frame_start:
+        jsr cpu_end
         ldx #251
         jsr wait_line
-        METER 2
-        rts
+        jmp cpu_start
 
 ; DMA fade level `level' of picture `cur' into palette entries 16-255.
 set_palette:
