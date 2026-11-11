@@ -1,8 +1,8 @@
 ; parallax.s - Parallax world: two 256-colour tile layers scrolling at
 ; different speeds behind a normal VIC-II score bar.
 ;
-; Layer 1 (back): mountains and sky, 8x8 8-bit tiles, scrolls 1 pixel every
-; 2 frames.  Layer 0 (front): hills and trees with transparent sky, 1 pixel
+; Layer 1 (back): mountains and sky, 8x8 8-bit tiles, scrolls 1 pixel per
+; frame.  Layer 0 (front): hills and trees with transparent sky, 2 pixels
 ; per frame.  Both maps are 128x32 tiles (1024 pixels wide, seamless), so
 ; the scroll registers just count up and the map wraps.  The artwork was
 ; made with Nano Banana (see art/).  The VIC-II's text rows
@@ -60,7 +60,6 @@ main:
         sta front_x + 1
         sta back_x
         sta back_x + 1
-        sta frame
         sta score
         sta score + 1
         sta score + 2
@@ -80,9 +79,12 @@ loop:
         jsr wait_line
         jsr cpu_start
 
-        ; front layer: 1 pixel per frame
-        inc front_x
-        bne :+
+        ; front layer: 2 pixels per frame
+        clc
+        lda front_x
+        adc #2
+        sta front_x
+        bcc :+
         inc front_x + 1
 :       VICX_P0_SET VICX_LAYER0 + VICX_L_SCROLLX, VICX_STEP_1
         lda front_x
@@ -90,11 +92,8 @@ loop:
         lda front_x + 1
         sta VICX_P0_DATA
 
-        ; back layer: 1 pixel every second frame
-        inc frame
-        lda frame
-        and #1
-        bne :++
+        ; back layer: 1 pixel per frame (every layer moves every frame, so
+        ; nothing steps at half rate)
         inc back_x
         bne :+
         inc back_x + 1
@@ -103,7 +102,7 @@ loop:
         sta VICX_P0_DATA
         lda back_x + 1
         sta VICX_P0_DATA
-:
+
         ; score + 1 (BCD), shown on row 1 from column 8
         sed
         clc
@@ -144,5 +143,4 @@ title:  .byte "  SCORE 000000          VIC-X PARALLAX", 0
 .bss
 front_x: .res 2
 back_x:  .res 2
-frame:   .res 1
 score:   .res 3
