@@ -217,7 +217,26 @@ function soundOff() {
   actx = abort = null;
   soundBtn.textContent = 'Sound on';
 }
-soundBtn.onclick = () => { if (actx) soundOff(); else soundOn(); scr.focus(); };
+function remember(on) { try { localStorage.setItem('u64live.sound', on ? '1' : '0'); } catch (e) {} }
+soundBtn.onclick = e => {
+  e.stopPropagation();
+  if (actx) { soundOff(); remember(false); } else { soundOn(); remember(true); }
+  scr.focus();
+};
+// Browsers start sound only after a click or key on the page: if sound was
+// on last time, the first one after a reload turns it back on.
+let wantSound = false;
+try { wantSound = localStorage.getItem('u64live.sound') === '1'; } catch (e) {}
+if (wantSound) {
+  soundBtn.textContent = 'Sound on (click the page)';
+  const resume = ev => {
+    removeEventListener('pointerdown', resume, true);
+    removeEventListener('keydown', resume, true);
+    if (ev.target !== soundBtn && !actx) soundOn();   // the button handles itself
+  };
+  addEventListener('pointerdown', resume, true);
+  addEventListener('keydown', resume, true);
+}
 for (const id of ['joy', 'port', 'fire']) {      // remembered in this browser
   const el = document.getElementById(id), key = 'u64live.' + id;
   try { const v = localStorage.getItem(key); if (v !== null) el[el.type === 'checkbox' ? 'checked' : 'value'] = el.type === 'checkbox' ? v === '1' : v; } catch (e) {}
