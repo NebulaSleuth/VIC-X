@@ -84,49 +84,91 @@ const J = { ArrowUp:'up', ArrowDown:'down', ArrowLeft:'left', ArrowRight:'right'
 const held = {};          // C64 key, or 'j<port>:<input>' -> count
 const down = {};          // browser code -> the names it pressed
 
-// Events go one at a time, in order, at least GAP ms apart, and a release
-// no sooner than MIN_HOLD ms after its press: the KERNAL scans the keyboard
-// once a frame, so a shorter press, or two changes in one frame, can be
-// missed. Fast typing queues up instead of piling keys on top of each other.
-const GAP = 20, MIN_HOLD = 50;
-let queue = [], busy = false, lastSent = 0;
+// Keyboard events go one at a time, in order, at least GAP ms apart, and a
+// release no sooner than MIN_HOLD ms after its press: the KERNAL scans the
+// keyboard once a frame, so a shorter press, or two changes in one frame,
+// can be missed. Fast typing queues up instead of piling keys together.
+//
+// The joystick is not queued: it is a state (what is held now), sent ahead
+// of any queued keys, so a held direction can never hold up a fire press.
+// A fire or direction is still held at least MIN_HOLD ms, so a game that
+// reads the port once a frame sees a quick tap.
+const GAP = 20, MIN_HOLD = 50, REPEAT_GAP = 40;
+let queue = [], busy = false, lastSent = 0, joyDirty = false;
 const sleep = ms => new Promise(r => setTimeout(r, ms));
+const pressTime = {};                         // 'keyboard:x', 'joystick2:up' -> sent at
+const joySent = {1: new Set(), 2: new Set()}; // what the Ultimate holds now
 
-function send(ev) { queue.push({ev}); pump(); }
+function send(ev) { queue.push(ev); pump(); }
+async function post(events) {
+  try {
+    const r = await fetch('/input', {method: 'POST', headers: {'Content-Type': 'application/json'},
+                                     body: JSON.stringify({events})});
+    const j = await r.json();
+    inputMsg = (j.errors && j.errors.length) ? 'input: ' + j.errors.join('; ') : '';
+  } catch (e) { inputMsg = 'input failed'; }
+}
+// The joystick events that bring the Ultimate to the held state now, and
+// when a release that must wait for MIN_HOLD is due.
+function joyEvents(now) {
+  const evs = [];
+  let later = Infinity;
+  for (const p of [1, 2]) {
+    const want = new Set();
+    for (const n in held) if (held[n] > 0 && n[0] === 'j' && n[1] === String(p)) want.add(n.slice(3));
+    const have = joySent[p], press = [], rel = [];
+    for (const i of want) if (!have.has(i)) press.push(i);
+    for (const i of have) if (!want.has(i)) {
+      const due = (pressTime['joystick' + p + ':' + i] || 0) + MIN_HOLD;
+      if (due <= now) rel.push(i); else later = Math.min(later, due);
+    }
+    if (rel.length) evs.push({kind: 'joystick', port: p, inputs: rel, transition: 'release'});
+    if (press.length) evs.push({kind: 'joystick', port: p, inputs: press, transition: 'press'});
+  }
+  return {evs, later};
+}
 async function pump() {
   if (busy) return;
   busy = true;
-  while (queue.length) {
-    const {ev} = queue.shift();
-    const ids = (ev.inputs || []).map(n => ev.kind + (ev.port || '') + ':' + n);
+  for (;;) {
+    const now = performance.now();
+    if (joyDirty) {
+      const {evs, later} = joyEvents(now);
+      joyDirty = later !== Infinity;
+      if (evs.length) {
+        for (const ev of evs) for (const i of ev.inputs) {
+          if (ev.transition === 'press') { joySent[ev.port].add(i); pressTime['joystick' + ev.port + ':' + i] = now; }
+          else joySent[ev.port].delete(i);
+        }
+        await post(evs);
+        continue;
+      }
+      if (joyDirty && !queue.length) { await sleep(Math.max(1, later - now)); continue; }
+    }
+    if (!queue.length) break;
+    const ev = queue[0];
+    const ids = (ev.inputs || []).map(n => 'keyboard:' + n);
     let notBefore = lastSent + GAP;
     if (ev.transition === 'release')
       for (const id of ids) notBefore = Math.max(notBefore, (pressTime[id] || 0) + MIN_HOLD);
-    const wait = notBefore - performance.now();
-    if (wait > 0) await sleep(wait);
-    lastSent = performance.now();
-    if (ev.transition === 'press') for (const id of ids) pressTime[id] = lastSent;
-    try {
-      const r = await fetch('/input', {method: 'POST', headers: {'Content-Type': 'application/json'},
-                                       body: JSON.stringify({events: [ev]})});
-      const j = await r.json();
-      inputMsg = (j.errors && j.errors.length) ? 'input: ' + j.errors.join('; ') : '';
-    } catch (e) { inputMsg = 'input failed'; }
+    if (notBefore > now) { await sleep(Math.min(notBefore - now, 10)); continue; }  // let the joystick in
+    queue.shift();
+    lastSent = now;
+    if (ev.transition === 'press') for (const id of ids) pressTime[id] = now;
+    await post([ev]);
   }
   busy = false;
 }
-const pressTime = {};     // inputs of a press event -> when it was sent
 function change(names, transition) {
-  const kb = [], joy = {};
+  const kb = [];
   for (const n of names) {
     const was = held[n] || 0;
     held[n] = Math.max(was + (transition === 'press' ? 1 : -1), 0);
-    if ((transition === 'press' && was === 0) || (transition === 'release' && was === 1)) {
-      if (n[0] === 'j') (joy[n[1]] = joy[n[1]] || []).push(n.slice(3)); else kb.push(n);
-    }
+    if (n[0] === 'j') joyDirty = true;
+    else if ((transition === 'press' && was === 0) || (transition === 'release' && was === 1)) kb.push(n);
   }
   if (kb.length) send({kind: 'keyboard', inputs: kb, transition});
-  for (const p in joy) send({kind: 'joystick', port: +p, inputs: joy[p], transition});
+  else pump();
 }
 function namesFor(e) {
   const port = document.getElementById('port').value;
@@ -137,7 +179,12 @@ function namesFor(e) {
   return K[e.code];
 }
 function restore() { send({kind: 'keyboard', inputs: ['restore'], transition: 'tap'}); }
+// Some systems repeat a held key as quick up/down pairs instead of keydowns
+// marked as repeats: a keyup followed by a keydown of the same key within
+// REPEAT_GAP ms means the key stayed down.
+const upTimer = {};
 scr.addEventListener('keydown', e => {
+  if (upTimer[e.code]) { clearTimeout(upTimer[e.code]); delete upTimer[e.code]; e.preventDefault(); return; }
   if (e.code === 'PageUp') { e.preventDefault(); if (!e.repeat) restore(); return; }
   let names = namesFor(e);
   if (!names) return;
@@ -154,12 +201,20 @@ scr.addEventListener('keyup', e => {
   const names = down[e.code];
   if (!names) return;
   e.preventDefault();
-  delete down[e.code];
-  change(names, 'release');
+  clearTimeout(upTimer[e.code]);
+  upTimer[e.code] = setTimeout(() => {
+    delete upTimer[e.code];
+    if (down[e.code] !== names) return;
+    delete down[e.code];
+    change(names, 'release');
+  }, REPEAT_GAP);
 });
 function releaseAll() {
+  for (const k in upTimer) { clearTimeout(upTimer[k]); delete upTimer[k]; }
   for (const k in down) delete down[k];
   for (const k in held) delete held[k];
+  joySent[1].clear(); joySent[2].clear();
+  joyDirty = false;
   queue.length = 0;
   send({kind: 'release_all'});
 }
