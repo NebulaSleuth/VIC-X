@@ -70,10 +70,13 @@ demo_fail:
 
 msg_novicx:
         .byte "VIC-X NOT FOUND.", 13, 13
-        .byte "RUN X64SC WITH -VICX.", 0
+        .byte "THIS DEMO NEEDS A C64 WITH VIC-X:", 13
+        .byte "X64SC -VICX, OR AN FPGA CORE WITH IT.", 0
 msg_noxram:
-        .byte "THIS DEMO NEEDS XRAM: RUN X64SC WITH", 13
-        .byte "-REU -REUSIZE 2048 -REUIMAGE <DEMO>.REU", 0
+        .byte "THIS DEMO NEEDS AN REU OF 2 MB OR MORE.", 13, 13
+        .byte "X64SC: -REU -REUSIZE 2048", 13
+        .byte "ULTIMATE: RAM EXPANSION UNIT ENABLED,", 13
+        .byte "REU SIZE 2 MB OR MORE.", 0
 
 ; --- helpers ------------------------------------------------------------
 
@@ -693,7 +696,9 @@ msg_loading:
 msg_loaderr:
         .byte "COULD NOT LOAD THE DEMO DATA.", 13, 13
         .byte "THE DATA FILE MUST BE ON THE SAME DISK", 13
-        .byte "AS THE DEMO.", 0
+        .byte "AS THE DEMO. ON AN ULTIMATE, THE .REU", 13
+        .byte "FILE CAN BE IN THE DEMO'S USB FOLDER", 13
+        .byte "(COMMAND INTERFACE ENABLED).", 0
 
 .pushseg
 .bss
