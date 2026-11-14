@@ -181,7 +181,8 @@ http://localhost:8064/ from its video stream, and passes the keyboard (and a
 joystick on the arrow keys) through to the C64 with real keypresses
 (`/v1/machine:input`, firmware 3.15 or later, Ultimate 64 class only), with
 buttons for reset, the Ultimate menu and RESTORE. The key layout is listed
-on the page. `tools/u64grab.py <host> out.png` grabs one frame from the
+on the page. Sound on plays the Ultimate's audio stream (48 kHz stereo),
+which comes in on the same UDP port. `tools/u64grab.py <host> out.png` grabs one frame from the
 stream; both need inbound UDP port 11000 open in the firewall.
 `tools/u64screen.py <host> out.png` draws the text screen from memory
 instead, with no stream.

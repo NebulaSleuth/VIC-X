@@ -9,7 +9,8 @@ serves them at http://localhost:<http>/ : a page that shows the newest frame
 about 25 times a second, plus /frame.png (one frame) and /status (JSON).
 On the page (u64live.html) the keyboard, and a joystick on the arrow keys,
 go to the C64 through /v1/machine:input (firmware 3.15+, Ultimate 64
-class only), with buttons for reset, the Ultimate menu and RESTORE.
+class only), with buttons for reset, the Ultimate menu and RESTORE. The audio stream
+comes in on the same UDP port and plays on the page after Sound on.
 Stops the stream on exit. Needs Pillow, and inbound UDP on the --udp port
 allowed by the firewall. The stream carries the VIC-II's 4-bit colours,
 so the page uses the standard C64 palette.
@@ -18,6 +19,7 @@ import argparse
 import atexit
 import io
 import json
+import queue
 import socket
 import struct
 import sys
@@ -32,6 +34,10 @@ from PIL import Image
 
 from u64grab import PALETTE, my_ip_towards, rest
 
+# Ultimate audio stream: 2-byte sequence number, then 192 stereo frames of
+# 16-bit little-endian samples, 250 packets a second (48 kHz).
+AUDIO_PACKET = 2 + 192 * 4
+
 FLAT_PALETTE = [c for rgba in PALETTE for c in rgba[:3]]
 
 PAGE = Path(__file__).with_name("u64live.html")   # read on each request
@@ -45,6 +51,7 @@ class Stream:
         self.size = (0, 0)
         self.frames = 0
         self.times = []
+        self.listeners = []     # one queue.Queue of PCM chunks per /audio client
 
     def start(self):
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -52,12 +59,15 @@ class Stream:
         self.sock.bind(("0.0.0.0", self.port))
         self.sock.settimeout(1.0)
         rest(self.host, f"/v1/streams/video:start?ip={self.me}:{self.port}")
+        # audio on the same port: its packets are 770 bytes, video's 780
+        rest(self.host, f"/v1/streams/audio:start?ip={self.me}:{self.port}")
         atexit.register(self.stop)
         threading.Thread(target=self.run, daemon=True).start()
 
     def stop(self):
         try:
             rest(self.host, "/v1/streams/video:stop")
+            rest(self.host, "/v1/streams/audio:stop")
         except Exception:
             pass
 
@@ -69,6 +79,9 @@ class Stream:
             try:
                 pkt, _ = self.sock.recvfrom(2048)
             except socket.timeout:
+                continue
+            if len(pkt) == AUDIO_PACKET:
+                self.audio(pkt[2:])
                 continue
             if len(pkt) < 12:
                 continue
@@ -110,6 +123,23 @@ class Stream:
             self.frames += 1
             self.times = [t for t in self.times if now - t < 2] + [now]
 
+    def audio(self, pcm):
+        with self.lock:
+            listeners = list(self.listeners)
+        for q in listeners:
+            if q.qsize() < 50:                 # a stalled client loses audio, not memory
+                q.put(pcm)
+
+    def listen(self):
+        q = queue.Queue()
+        with self.lock:
+            self.listeners.append(q)
+        return q
+
+    def unlisten(self, q):
+        with self.lock:
+            self.listeners.remove(q)
+
     def status(self):
         with self.lock:
             fps = (len(self.times) - 1) / max(self.times[-1] - self.times[0], 1e-6) if len(self.times) > 1 else 0
@@ -141,6 +171,25 @@ def handler_for(stream):
                     self.send(204, "image/png", b"")
                 else:
                     self.send(200, "image/png", png)
+            elif path == "/audio":
+                # raw PCM, 16-bit little-endian stereo at 48 kHz, until the client goes
+                self.send_response(200)
+                self.send_header("Content-Type", "application/octet-stream")
+                self.send_header("Cache-Control", "no-store")
+                self.end_headers()
+                q = stream.listen()
+                try:
+                    while True:
+                        try:
+                            chunk = q.get(timeout=2)
+                        except queue.Empty:
+                            continue
+                        self.wfile.write(chunk)
+                        self.wfile.flush()
+                except OSError:
+                    pass
+                finally:
+                    stream.unlisten(q)
             elif path == "/status":
                 self.send(200, "application/json", json.dumps(stream.status()).encode())
             else:

@@ -17,6 +17,7 @@
  <button data-act="menu">Ultimate menu</button>
  <button id="restore">RESTORE</button>
  <button id="release">Release all</button>
+ <button id="sound">Sound on</button>
  <label><input type="checkbox" id="joy"> Joystick on arrows + Right Ctrl</label>
  <select id="port"><option value="2">port 2</option><option value="1">port 1</option></select>
 </div>
@@ -160,5 +161,54 @@ document.getElementById('restore').onclick = () => { restore(); scr.focus(); };
 for (const b of document.querySelectorAll('button[data-act]'))
   b.onclick = async () => { await fetch('/action?do=' + b.dataset.act, {method: 'POST'}); scr.focus(); };
 img.addEventListener('click', () => scr.focus());
+
+// Sound: /audio is raw 16-bit little-endian stereo at 48 kHz. Chunks are
+// scheduled back to back a little ahead of the clock; if the queue runs
+// dry or grows past MAX_AHEAD (the two clocks drift), it starts over.
+const RATE = 48000, LEAD = 0.06, MAX_AHEAD = 0.25, CHUNK = 192 * 4 * 8;
+let actx = null, abort = null, nextTime = 0;
+const soundBtn = document.getElementById('sound');
+async function soundOn() {
+  actx = new AudioContext({sampleRate: RATE, latencyHint: 'interactive'});
+  abort = new AbortController();
+  soundBtn.textContent = 'Sound off';
+  nextTime = 0;
+  try {
+    const r = await fetch('/audio', {signal: abort.signal});
+    const reader = r.body.getReader();
+    let pend = new Uint8Array(0);
+    for (;;) {
+      const {value, done} = await reader.read();
+      if (done) break;
+      const all = new Uint8Array(pend.length + value.length);
+      all.set(pend); all.set(value, pend.length);
+      let off = 0;
+      while (all.length - off >= CHUNK) { play(all.subarray(off, off + CHUNK)); off += CHUNK; }
+      pend = all.slice(off);
+    }
+  } catch (e) {}
+}
+function play(bytes) {
+  const n = bytes.length / 4, dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.length);
+  const buf = actx.createBuffer(2, n, RATE), l = buf.getChannelData(0), r = buf.getChannelData(1);
+  for (let i = 0; i < n; i++) {
+    l[i] = dv.getInt16(i * 4, true) / 32768;
+    r[i] = dv.getInt16(i * 4 + 2, true) / 32768;
+  }
+  const now = actx.currentTime;
+  if (nextTime < now || nextTime > now + MAX_AHEAD) nextTime = now + LEAD;
+  const src = actx.createBufferSource();
+  src.buffer = buf;
+  src.connect(actx.destination);
+  src.start(nextTime);
+  nextTime += n / RATE;
+}
+function soundOff() {
+  if (abort) abort.abort();
+  if (actx) actx.close();
+  actx = abort = null;
+  soundBtn.textContent = 'Sound on';
+}
+soundBtn.onclick = () => { if (actx) soundOff(); else soundOn(); scr.focus(); };
 frame(); status(); scr.focus();
 </script></body></html>
