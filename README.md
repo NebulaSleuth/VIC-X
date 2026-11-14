@@ -176,7 +176,8 @@ VIC-X: they test what the demos use from the Ultimate itself.
     python tests/hw/run_uci_probe.py <host>     # UCI commands, LOAD_REU of 2 MB
     python tests/hw/run_uci_loader.py <host>    # the demos' loader, lib/uci.inc
 
-`tools/u64screen.py <host> out.png` draws the Ultimate's text screen from
+`tools/u64live.py <host>` shows the Ultimate's screen live at
+http://localhost:8064/ from its video stream. `tools/u64screen.py <host> out.png` draws the Ultimate's text screen from
 its memory; `tools/u64grab.py <host> out.png` grabs a frame from its video
 stream (inbound UDP port 11000 must be open in the firewall).
 
