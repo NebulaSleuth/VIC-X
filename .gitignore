@@ -1,3 +1,4 @@
 tests/build/
 __pycache__/
 demos/build/
+tests/hw/build/

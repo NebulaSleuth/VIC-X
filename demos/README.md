@@ -78,6 +78,25 @@ speeds up the KERNAL (JiffyDOS, a speeder cartridge, VICE's warp) speeds up
 these loads too; a fast loader or the Ultimate's own file access would be
 the next step for real hardware.
 
+Fast-load cartridges are no way round this: they use the `$DE00-$DFFF` I/O
+area, where the REU (that is, XRAM) lives, and most of them only speed up a
+1541, not the 1581 that `gallery` and `bigworld` need.
+
+### On an Ultimate (U64, C64 Ultimate): load the REU image from USB
+
+The Ultimate can put a `.reu` file straight into REU memory, which takes
+about a second instead of minutes:
+
+1. Copy `build/<demo>.prg` and `build/<demo>.reu` to a USB stick.
+2. In the Ultimate menu, under C64 and Cartridge Settings, turn the RAM
+   Expansion Unit on with an REU Size of 2 MB or more.
+3. In the file browser, select `<demo>.reu` and choose "Load into REU".
+4. Select `<demo>.prg` and run it. It finds its data already in XRAM (the
+   signature at `$1FFFF0`) and starts at once.
+
+REU Preload (with REU Preload Image set to the `.reu` file) does step 3 on
+every power-on, which suits a machine set up to show one demo.
+
     D:/Repos/vice-vicx/vice/build-ucrt64/src/x64sc.exe -directory D:/Repos/vice-vicx/vice/data -vicx -reu -reusize 2048 -autostart D:/Repos/VIC-X/demos/build/parallax.d64
 
 ## Running
