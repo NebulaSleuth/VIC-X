@@ -178,7 +178,7 @@ VIC-X: they test what the demos use from the Ultimate itself.
 
 `tools/u64live.py <host>` shows the Ultimate's screen live at
 http://localhost:8064/ from its video stream, and passes the keyboard (and a
-joystick on the arrow keys) through to the C64 with real keypresses
+joystick on the arrow keys, fire on a key you pick) through to the C64 with real keypresses
 (`/v1/machine:input`, firmware 3.15 or later, Ultimate 64 class only), with
 buttons for reset, the Ultimate menu and RESTORE. The key layout is listed
 on the page. Sound on plays the Ultimate's audio stream (48 kHz stereo),

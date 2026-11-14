@@ -18,7 +18,12 @@
  <button id="restore">RESTORE</button>
  <button id="release">Release all</button>
  <button id="sound">Sound on</button>
- <label><input type="checkbox" id="joy"> Joystick on arrows + Right Ctrl</label>
+ <label><input type="checkbox" id="joy"> Joystick on the arrows, fire on</label>
+ <select id="fire" title="Fire button key">
+  <option value="Space">Space</option><option value="ControlRight">Right Ctrl</option>
+  <option value="AltRight">Right Alt</option><option value="KeyZ">Z</option>
+  <option value="ShiftLeft">Left Shift</option><option value="Numpad0">Numpad 0</option>
+ </select>
  <select id="port"><option value="2">port 2</option><option value="1">port 1</option></select>
 </div>
 <div id="s">connecting</div>
@@ -72,7 +77,7 @@ const K = {
 };
 for (let c = 65; c <= 90; c++) K['Key' + String.fromCharCode(c)] = [String.fromCharCode(c + 32)];
 for (let d = 0; d <= 9; d++) { K['Digit' + d] = [String(d)]; K['Numpad' + d] = [String(d)]; }
-const J = { ArrowUp:'up', ArrowDown:'down', ArrowLeft:'left', ArrowRight:'right', ControlRight:'fire' };
+const J = { ArrowUp:'up', ArrowDown:'down', ArrowLeft:'left', ArrowRight:'right' };
 
 // One C64 key can be held by several browser keys (Shift, and Arrow Up's
 // shift): it is pressed by the first and released by the last.
@@ -125,7 +130,10 @@ function change(names, transition) {
 }
 function namesFor(e) {
   const port = document.getElementById('port').value;
-  if (document.getElementById('joy').checked && J[e.code]) return ['j' + port + ':' + J[e.code]];
+  if (document.getElementById('joy').checked) {
+    if (J[e.code]) return ['j' + port + ':' + J[e.code]];
+    if (e.code === document.getElementById('fire').value) return ['j' + port + ':fire'];
+  }
   return K[e.code];
 }
 function restore() { send({kind: 'keyboard', inputs: ['restore'], transition: 'tap'}); }
@@ -210,5 +218,13 @@ function soundOff() {
   soundBtn.textContent = 'Sound on';
 }
 soundBtn.onclick = () => { if (actx) soundOff(); else soundOn(); scr.focus(); };
+for (const id of ['joy', 'port', 'fire']) {      // remembered in this browser
+  const el = document.getElementById(id), key = 'u64live.' + id;
+  try { const v = localStorage.getItem(key); if (v !== null) el[el.type === 'checkbox' ? 'checked' : 'value'] = el.type === 'checkbox' ? v === '1' : v; } catch (e) {}
+  el.addEventListener('change', () => {
+    try { localStorage.setItem(key, el.type === 'checkbox' ? (el.checked ? '1' : '0') : el.value); } catch (e) {}
+    releaseAll(); scr.focus();
+  });
+}
 frame(); status(); scr.focus();
 </script></body></html>
