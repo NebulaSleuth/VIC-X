@@ -113,6 +113,10 @@ def main():
         import u64screen
         sys.argv = ["u64screen", a.host, a.png]
         u64screen.main()
+    with ftplib.FTP(a.host, timeout=30) as ftp:   # /Temp is the Ultimate's RAM
+        ftp.login()
+        ftp.cwd(a.dir)
+        ftp.delete(NAME)
     print("PASS: the REU holds the file" if ok else "FAIL")
     return 0 if ok else 1
 

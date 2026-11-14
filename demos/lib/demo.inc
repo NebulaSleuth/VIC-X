@@ -368,7 +368,10 @@ load_data:
         bpl :-
         rts                             ; already there
 
-ld_go:  jsr ld_screen
+ld_go:  jsr uci_load                    ; on an Ultimate: the .reu straight from USB
+        bcs :+
+        rts
+:       jsr ld_screen
         lda #DATA_NAME_LEN
         ldx #<data_name
         ldy #>data_name
@@ -466,6 +469,8 @@ ld_err: jsr CLRCHN
         ldx #<msg_loaderr
         ldy #>msg_loaderr
         jmp demo_fail
+
+        .include "uci.inc"             ; uci_load: the .reu from USB on an Ultimate
 
 ; DMA LD_OUT (ld_raw bytes) to XRAM ld_xaddr; the CPU waits while it runs.
 ld_store:

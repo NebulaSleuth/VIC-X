@@ -167,6 +167,19 @@ options and environment variables.
 | `t27_windows`      | XRAM windows: CAP_XRAM, paging, REU sharing, priority over ROM, slot rules, code in a window |
 | `t28_dma`          | DMA: fill, copy, masked 2D, chains, busy, IRQ bit, register space, start while busy, length 0 |
 
+### On an Ultimate over the network
+
+`tests/hw/` runs programs on a real Ultimate (U64, C64 Ultimate) through
+its REST API and FTP server, with no one at the machine. They need no
+VIC-X: they test what the demos use from the Ultimate itself.
+
+    python tests/hw/run_uci_probe.py <host>     # UCI commands, LOAD_REU of 2 MB
+    python tests/hw/run_uci_loader.py <host>    # the demos' loader, lib/uci.inc
+
+`tools/u64screen.py <host> out.png` draws the Ultimate's text screen from
+its memory; `tools/u64grab.py <host> out.png` grabs a frame from its video
+stream (inbound UDP port 11000 must be open in the firewall).
+
 ### Stock compatibility
 
 `stock-compat.py` runs self-checking VIC-II programs from VICE's own

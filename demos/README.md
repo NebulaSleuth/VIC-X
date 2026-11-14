@@ -82,20 +82,30 @@ Fast-load cartridges are no way round this: they use the `$DE00-$DFFF` I/O
 area, where the REU (that is, XRAM) lives, and most of them only speed up a
 1541, not the 1581 that `gallery` and `bigworld` need.
 
-### On an Ultimate (U64, C64 Ultimate): load the REU image from USB
+### On an Ultimate (U64, C64 Ultimate): the demo loads its REU image from USB
 
-The Ultimate can put a `.reu` file straight into REU memory, which takes
-about a second instead of minutes:
+On an Ultimate the demo loads `<demo>.reu` itself through the Ultimate
+Command Interface (`lib/uci.inc`), straight into the REU: 2 MB in about
+0.2 seconds instead of minutes.
 
-1. Copy `build/<demo>.prg` and `build/<demo>.reu` to a USB stick.
+1. Copy `build/<demo>.reu` to a USB stick, in the same folder as the demo
+   (`build/<demo>.prg`, or its `.d64`/`.d81`).
 2. In the Ultimate menu, under C64 and Cartridge Settings, turn the RAM
-   Expansion Unit on with an REU Size of 2 MB or more.
-3. In the file browser, select `<demo>.reu` and choose "Load into REU".
-4. Select `<demo>.prg` and run it. It finds its data already in XRAM (the
-   signature at `$1FFFF0`) and starts at once.
+   Expansion Unit on with an REU Size of 2 MB or more, and set Command
+   Interface to Enabled.
+3. Run the demo from the file browser.
 
-REU Preload (with REU Preload Image set to the `.reu` file) does step 3 on
-every power-on, which suits a machine set up to show one demo.
+The demo looks for `<demo>.reu` in the Ultimate's current DOS directory,
+then in its home directory. If UCI is off, the file is in neither, or the
+load is incomplete, it falls back to loading `<demo>.dat` with the KERNAL.
+`tests/hw/run_uci_loader.py` checks both cases on a networked Ultimate
+(passed on an Ultimate 64 Elite, firmware 3.15a). Not yet checked: that
+the current DOS directory follows the file browser when a program is
+started from it (the remote test sets it with CHANGE_DIR).
+
+Without UCI, the file browser's "Load into REU" on `<demo>.reu` does the
+same by hand, and REU Preload does it on every power-on; the demo then
+finds its signature at `$1FFFF0` and starts at once.
 
     D:/Repos/vice-vicx/vice/build-ucrt64/src/x64sc.exe -directory D:/Repos/vice-vicx/vice/data -vicx -reu -reusize 2048 -autostart D:/Repos/VIC-X/demos/build/parallax.d64
 

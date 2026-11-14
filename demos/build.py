@@ -169,6 +169,9 @@ def pack(demo, assets):
               ".pushseg", ".rodata",
               f'data_name:    .byte "{name},S,R"',
               f'demo_sig:     .byte "{sig.decode()}"',
+              f"REU_NAME_LEN  = {len(demo) + 4}",
+              f'reu_name:     .byte "{demo}.reu"',      # ASCII, for the Ultimate's UCI
+              f"REU_IMAGE_LEN = {REU_SIZE}",
               ".popseg"]
     (BUILD / f"{demo}.reu").write_bytes(image)
     inc = BUILD / demo
