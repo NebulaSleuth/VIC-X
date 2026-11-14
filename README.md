@@ -177,9 +177,14 @@ VIC-X: they test what the demos use from the Ultimate itself.
     python tests/hw/run_uci_loader.py <host>    # the demos' loader, lib/uci.inc
 
 `tools/u64live.py <host>` shows the Ultimate's screen live at
-http://localhost:8064/ from its video stream. `tools/u64screen.py <host> out.png` draws the Ultimate's text screen from
-its memory; `tools/u64grab.py <host> out.png` grabs a frame from its video
-stream (inbound UDP port 11000 must be open in the firewall).
+http://localhost:8064/ from its video stream, and passes the keyboard (and a
+joystick on the arrow keys) through to the C64 with real keypresses
+(`/v1/machine:input`, firmware 3.15 or later, Ultimate 64 class only), with
+buttons for reset, the Ultimate menu and RESTORE. The key layout is listed
+on the page. `tools/u64grab.py <host> out.png` grabs one frame from the
+stream; both need inbound UDP port 11000 open in the firewall.
+`tools/u64screen.py <host> out.png` draws the text screen from memory
+instead, with no stream.
 
 ### Stock compatibility
 

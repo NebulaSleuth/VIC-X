@@ -7,6 +7,9 @@ Starts the Ultimate's VIC video stream to this machine (REST API
 /v1/streams/video:start), assembles the frames from the UDP packets and
 serves them at http://localhost:<http>/ : a page that shows the newest frame
 about 25 times a second, plus /frame.png (one frame) and /status (JSON).
+On the page (u64live.html) the keyboard, and a joystick on the arrow keys,
+go to the C64 through /v1/machine:input (firmware 3.15+, Ultimate 64
+class only), with buttons for reset, the Ultimate menu and RESTORE.
 Stops the stream on exit. Needs Pillow, and inbound UDP on the --udp port
 allowed by the firewall. The stream carries the VIC-II's 4-bit colours,
 so the page uses the standard C64 palette.
@@ -20,7 +23,9 @@ import struct
 import sys
 import threading
 import time
+import urllib.error
 import urllib.request
+from pathlib import Path
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from PIL import Image
@@ -29,40 +34,7 @@ from u64grab import PALETTE, my_ip_towards, rest
 
 FLAT_PALETTE = [c for rgba in PALETTE for c in rgba[:3]]
 
-PAGE = b"""<!doctype html>
-<html><head><meta charset="utf-8"><title>Ultimate 64 live</title>
-<style>
- html,body{margin:0;height:100%;background:#111;color:#bbb;font:13px system-ui,sans-serif}
- body{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px}
- img{image-rendering:pixelated;width:min(96vw,calc(88vh*384/272));aspect-ratio:384/272;background:#000}
-</style></head><body>
-<img id="f" alt="Ultimate 64 screen">
-<div id="s">connecting</div>
-<script>
-const img = document.getElementById('f'), s = document.getElementById('s');
-let last = null;
-async function frame() {
-  try {
-    const r = await fetch('/frame.png?' + Date.now());
-    if (r.status === 200) {
-      const u = URL.createObjectURL(await r.blob());
-      img.onload = () => { if (last) URL.revokeObjectURL(last); last = u; };
-      img.src = u;
-    }
-  } catch (e) {}
-  setTimeout(frame, 40);
-}
-async function status() {
-  try {
-    const j = await (await fetch('/status')).json();
-    s.textContent = j.frames ? `${j.host} - ${j.fps.toFixed(1)} frames/s - ${j.width}x${j.height}`
-                             : `${j.host} - waiting for the video stream (firewall?)`;
-  } catch (e) { s.textContent = 'viewer stopped'; }
-  setTimeout(status, 1000);
-}
-frame(); status();
-</script></body></html>
-"""
+PAGE = Path(__file__).with_name("u64live.html")   # read on each request
 
 
 class Stream:
@@ -161,7 +133,7 @@ def handler_for(stream):
         def do_GET(self):
             path = self.path.split("?", 1)[0]
             if path == "/":
-                self.send(200, "text/html; charset=utf-8", PAGE)
+                self.send(200, "text/html; charset=utf-8", PAGE.read_bytes())
             elif path == "/frame.png":
                 with stream.lock:
                     png = stream.png
@@ -173,7 +145,40 @@ def handler_for(stream):
                 self.send(200, "application/json", json.dumps(stream.status()).encode())
             else:
                 self.send(404, "text/plain", b"not found")
+
+        def do_POST(self):
+            path, _, query = self.path.partition("?")
+            body = self.rfile.read(int(self.headers.get("Content-Length") or 0))
+            if path == "/input":
+                # keyboard and joystick: firmware 3.15+, Ultimate 64 class only
+                code, reply = forward(stream.host, "POST", "/v1/machine:input", body)
+            elif path == "/action" and query in ACTIONS:
+                code, reply = forward(stream.host, "PUT", ACTIONS[query], None)
+            else:
+                code, reply = 404, b'{"errors": ["not found"]}'
+            self.send(code, "application/json", reply)
     return Handler
+
+
+ACTIONS = {"do=reset": "/v1/machine:reset", "do=menu": "/v1/machine:menu_button"}
+
+
+def forward(host, method, route, body):
+    """Pass one REST call on to the Ultimate; return (status, JSON body)."""
+    req = urllib.request.Request(f"http://{host}{route}", data=body, method=method)
+    if body is not None:
+        req.add_header("Content-Type", "application/json")
+    try:
+        with urllib.request.urlopen(req, timeout=5) as r:
+            return r.status, r.read()
+    except urllib.error.HTTPError as e:
+        return e.code, e.read() or json.dumps({"errors": [str(e)]}).encode()
+    except OSError as e:
+        return 502, json.dumps({"errors": [str(e)]}).encode()
+
+
+class IPv6Server(ThreadingHTTPServer):
+    address_family = socket.AF_INET6
 
 
 def main():
@@ -186,6 +191,13 @@ def main():
     stream = Stream(a.host, a.me or my_ip_towards(a.host), a.udp)
     stream.start()
     server = ThreadingHTTPServer(("127.0.0.1", a.http), handler_for(stream))
+    # Browsers try "localhost" as ::1 first; without a listener there every
+    # request waits about 200 ms on Windows, which makes typing crawl.
+    try:
+        server6 = IPv6Server(("::1", a.http), handler_for(stream))
+        threading.Thread(target=server6.serve_forever, daemon=True).start()
+    except OSError:
+        pass
     print(f"streaming {a.host} -> {stream.me}:{a.udp}; view at http://localhost:{a.http}/", flush=True)
     try:
         server.serve_forever()
