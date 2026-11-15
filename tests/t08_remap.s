@@ -6,8 +6,8 @@
 ; with VIC-X disabled must show the stock colours, since every VIC-X write
 ; then lands in a VIC-II mirror.
 ;
-; The remap is applied per frame in step 1, so the program waits two frames
-; before it ends.
+; The program waits a few frames before it ends, so the exit screenshot
+; shows a whole frame drawn with the remap on.
 ;
 ; RUN: -vicx
 ; PIXEL: 4 4 FF0000
