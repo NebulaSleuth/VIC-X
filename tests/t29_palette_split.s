@@ -57,7 +57,17 @@ frame:
         sta VICX_P0_DATA
 
         dex
+.ifdef HW_RESULT
+        ; on hardware the screenshot comes long after the end: show PASS,
+        ; then keep splitting so the screenshot catches the bands
         bne frame
+        lda #0
+        jsr hw_result
+        ldx #1
+        jmp frame
+.else
+        bne frame
+.endif
         cli
 
         ; with VIC-X disabled the writes above went to VIC-II mirrors

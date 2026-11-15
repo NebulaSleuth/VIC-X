@@ -181,6 +181,22 @@ To watch, hear and control the Ultimate while these run, use u64remote
 
     python D:/Repos/u64remote/run_u64remote.py <host>   # then open http://localhost:8064/
 
+### On the MiSTer with the C64X core
+
+`tests/hw/run_mister.py` runs conformance tests on a MiSTer that has the
+C64X core (`D:\Repos\C64X_MiSTer`, branch `vicx`) in `_Computer`. Each test
+is assembled with `-D HW_RESULT`, so it also shows its result on screen:
+a green border and PASS, or a red border and FAIL with the code in hex.
+The script loads the core fresh with the PRG through a launch file, takes a
+screenshot over SSH, and judges the border. Needs SSH key access as root.
+
+    python tests/hw/run_mister.py [--host 192.168.1.140] [test ...]
+
+The default set is the step 1 tests that need neither VICE's monitor nor
+snapshots: t01, t03, t04, t05, t07, t08, t29. Screenshots land in
+`tests/build/mister/`. t04 fails with code 07 until the FPGA block has
+sprites, since it checks VICE's CAP_SPR.
+
 `tools/u64screen.py <host> out.png` draws the text screen from memory, with
 no stream; `tools/u64grab.py <host> out.png` grabs one frame from the video
 stream (inbound UDP port 11000 must be open in the firewall).

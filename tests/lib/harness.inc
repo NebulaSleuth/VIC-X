@@ -27,6 +27,61 @@ DBGCART = $D7FF
         txs
         jmp main
 
+; Real hardware has no debug cartridge.  Assembled with -D HW_RESULT, a test
+; also shows its result: border green (colour 5) and "PASS", or border red
+; (colour 2) and "FAIL xx" with the failure code in hex, on the top line.
+.if .defined(HW_RESULT) .and (.not .defined(RESULT_HOOK))
+RESULT_HOOK = hw_result
+hw_result:
+        pha
+        tax
+        beq @pass
+        lda #2
+        sta $D020
+        ldy #3
+:       lda @fail_txt,y
+        sta $0400,y
+        lda #1
+        sta $D800,y
+        dey
+        bpl :-
+        txa
+        lsr
+        lsr
+        lsr
+        lsr
+        jsr @hex
+        sta $0405
+        txa
+        and #$0F
+        jsr @hex
+        sta $0406
+        lda #1
+        sta $D805
+        sta $D806
+        pla
+        rts
+@pass:  lda #5
+        sta $D020
+        ldy #3
+:       lda @pass_txt,y
+        sta $0400,y
+        lda #1
+        sta $D800,y
+        dey
+        bpl :-
+        pla
+        rts
+@hex:   cmp #10                 ; 0-9 -> "0"-"9", 10-15 -> "A"-"F"
+        bcc :+
+        sbc #9
+        rts
+:       ora #$30
+        rts
+@pass_txt: .byte 16, 1, 19, 19  ; PASS (screen codes)
+@fail_txt: .byte 6, 1, 9, 12    ; FAIL
+.endif
+
 ; --- result macros -------------------------------------------------------
 
 ; A test may define RESULT_HOOK (a subroutine) before including this file;
