@@ -3,3 +3,4 @@ __pycache__/
 demos/build/
 tests/hw/build/
 .claude/launch.json
+hdl/build/
