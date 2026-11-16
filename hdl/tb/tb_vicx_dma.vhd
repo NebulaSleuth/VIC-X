@@ -148,7 +148,10 @@ begin
     -- spaces at their SDRAM addresses
     mem_model : process (clk)
         variable cnt   : natural := 0;
-        variable t     : integer := -1;
+        type tq_t is array (0 to 3) of integer;
+        type bq_t is array (0 to 3) of std_logic_vector(63 downto 0);
+        variable tq    : tq_t := (others => -1);   -- reads in flight: clocks since taken
+        variable bq    : bq_t;
         variable a, sp, o : natural;
         variable slot  : natural;
         variable blk   : std_logic_vector(63 downto 0);
@@ -169,16 +172,18 @@ begin
         if rising_edge(clk) then
             vx_ack    <= '0';
             vx_rvalid <= '0';
-            if t >= 0 then
-                t := t + 1;
-                if t = 4 then
-                    vx_rdata  <= blk;
-                    vx_rvalid <= '1';
-                    t := -1;
+            for k in 0 to 3 loop
+                if tq(k) >= 0 then
+                    tq(k) := tq(k) + 1;
+                    if tq(k) = 4 then
+                        vx_rdata  <= bq(k);
+                        vx_rvalid <= '1';
+                        tq(k) := -1;
+                    end if;
                 end if;
-            end if;
+            end loop;
             slot := (cnt / 4) mod 8;
-            if t < 0 and cnt mod 4 = 0 and vx_req = '1' and
+            if cnt mod 4 = 0 and vx_req = '1' and
                (slot = 1 or slot = 4 or slot = 5 or slot = 6) then
                 a := to_integer(unsigned(vx_addr));
                 vx_ack <= '1';
@@ -203,7 +208,13 @@ begin
                             blk(8 * n + 7 downto 8 * n) := std_logic_vector(to_unsigned(model.get(sp, o), 8));
                         end if;
                     end loop;
-                    t := 0;
+                    for k in 0 to 3 loop
+                        if tq(k) < 0 then
+                            tq(k) := 0;
+                            bq(k) := blk;
+                            exit;
+                        end if;
+                    end loop;
                 end if;
             end if;
             cnt := cnt + 1;

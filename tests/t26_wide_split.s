@@ -79,6 +79,13 @@ frame:
         sta VICX_P0_DATA
         dec frames
         bne frame
+.ifdef HW_RESULT
+        ; on hardware the screenshot comes later: show the result, and keep
+        ; the splits going
+        lda #0
+        jsr RESULT_HOOK
+        jmp frame
+.endif
         PASS
 
 wait_line:

@@ -11,7 +11,7 @@ mkdir -p build
 cd build
 GHDL="ghdl"
 FLAGS="--std=08 --workdir=. -frelaxed"
-$GHDL -a $FLAGS ../vicx_layer.vhd ../vicx.vhd
+$GHDL -a $FLAGS ../vicx_layer.vhd ../vicx_sprites.vhd ../vicx.vhd
 status=0
 run() {
     echo "== $*"
@@ -29,4 +29,6 @@ run tb_vicx_step1 -gEXT=true -gGAP=128 -gMAXLAT=16
 run tb_vicx_step1 -gEXT=true -gGAP=128 -gMAXLAT=40
 run tb_vicx_step2 -gEXT=true
 run tb_vicx_step2 -gEXT=true -gREU=true
+run tb_vicx_step3 -gEXT=true
+run tb_vicx_step4 -gEXT=true
 exit $status

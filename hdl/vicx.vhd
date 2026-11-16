@@ -213,7 +213,10 @@ architecture rtl of vicx is
     type wq_addr_t  is array (0 to 15) of unsigned(16 downto 0);
     type wq_data_t  is array (0 to 15) of std_logic_vector(15 downto 0);
     type wq_be_t    is array (0 to 15) of std_logic_vector(1 downto 0);
-    type eng_t      is (E_IDLE, E_WREQ, E_DWREQ, E_RREQ, E_RWAIT);
+    type eng_t      is (E_IDLE, E_WREQ, E_DWREQ, E_RREQ);
+    -- reads in flight, oldest first (data come back in order): a port's
+    -- block, a layer's or the sprites' block, or the DMA's
+    type rqk_t      is (K_PORT, K_LINE, K_DMA);
     signal blk_data   : blk_data_t := (others => (others => '0'));
     signal blk_addr   : blk_addr_t := (others => (others => '0'));
     signal blk_valid  : std_logic_vector(1 downto 0) := "00";
@@ -279,7 +282,11 @@ architecture rtl of vicx is
     signal dmr_req    : std_logic := '0';         -- request to the engine
     signal dmr_we     : std_logic := '0';
     signal dmr_addr   : unsigned(24 downto 0) := (others => '0');
-    signal f_dma      : std_logic := '0';         -- the read in flight is the DMA's
+    signal cur_k      : rqk_t := K_PORT;          -- the read being requested
+    signal rq_n       : natural range 0 to 2 := 0;
+    signal rq_k0, rq_k1 : rqk_t := K_PORT;
+    signal rq_u0, rq_u1 : natural range 0 to 2 := 0;
+    signal pf_busy    : std_logic := '0';         -- a port fetch requested or in flight
     signal xmask      : unsigned(23 downto 0);
 
     -- video
@@ -295,32 +302,51 @@ architecture rtl of vicx is
     signal s_order    : std_logic_vector(7 downto 0) := (others => '0');
     constant HAS_TILES : boolean := CAP_FEAT(0) = '1';
 
-    -- this line: who is in front of whom
-    signal ord_l0_l1  : std_logic := '1';          -- layer 0 in front of layer 1
-    signal ord_vic_l0 : std_logic := '1';          -- VIC-II in front of layer 0
-    signal ord_vic_l1 : std_logic := '1';
+    -- this line: each source's place in the order, 0 = in front
+    -- (sprites, sprites behind, VIC-II, layer 0, layer 1)
+    type pos_t is array (0 to 4) of unsigned(2 downto 0);
+    constant SP_SPR   : natural := 0;
+    constant SP_BEH   : natural := 1;
+    constant SP_VIC   : natural := 2;
+    constant SP_L0    : natural := 3;
+    constant SP_L1    : natural := 4;
+    signal line_pos   : pos_t := ("000", "001", "010", "011", "100");
+    constant HAS_SPR  : boolean := CAP_FEAT(2) = '1';
 
     -- the layers and their fetches
-    type uaddr_t is array (0 to 1) of unsigned(13 downto 0);
+    -- fetch clients: layer 0, layer 1, sprites
+    type uaddr_t is array (0 to 2) of unsigned(13 downto 0);
     type uidx_t  is array (0 to 1) of std_logic_vector(7 downto 0);
-    signal u_req      : std_logic_vector(1 downto 0);
+    signal u_req      : std_logic_vector(2 downto 0);
     signal u_addr     : uaddr_t;
-    signal u_gnt      : std_logic_vector(1 downto 0) := "00";
-    signal u_valid    : std_logic_vector(1 downto 0) := "00";
+    signal u_gnt      : std_logic_vector(2 downto 0) := "000";
+    signal u_valid    : std_logic_vector(2 downto 0) := "000";
     signal u_data     : std_logic_vector(63 downto 0) := (others => '0');
     signal u_pref     : std_logic := '0';          -- whose turn when both ask
-    signal f_line     : std_logic := '0';          -- the read in flight is a layer's
-    signal f_lu       : natural range 0 to 1 := 0;
+    signal f_lu       : natural range 0 to 2 := 0;
     signal q_idx      : uidx_t;
     signal q_ok       : std_logic_vector(1 downto 0);
     signal q_late     : std_logic_vector(1 downto 0);
     signal win_y      : unsigned(8 downto 0);
     signal in_win     : std_logic;
 
+    -- the sprite engine
+    signal sp_front   : std_logic_vector(7 downto 0) := (others => '0');
+    signal sp_behind  : std_logic_vector(7 downto 0) := (others => '0');
+    signal sp_tw_we   : std_logic;
+    signal sp_tw_a    : unsigned(11 downto 0);
+    signal sp_tw_d    : std_logic_vector(7 downto 0);
+    signal sp_preq    : std_logic := '0';
+    signal sp_paddr   : unsigned(11 downto 0) := (others => '0');
+    signal sp_pdata   : std_logic_vector(7 downto 0) := (others => '0');
+    signal sp_pack    : std_logic := '0';
+    signal sp_irq     : std_logic := '0';
+    signal x_done     : std_logic;
+
     -- block RAM VRAM: a layer's block read a byte at a time, on clocks the
     -- CPU leaves the read port free
     signal br_busy    : std_logic := '0';
-    signal br_u       : natural range 0 to 1 := 0;
+    signal br_u       : natural range 0 to 2 := 0;
     signal br_blk     : unsigned(13 downto 0) := (others => '0');
     signal br_n       : natural range 0 to 8 := 0;
     signal br_i       : unsigned(2 downto 0) := (others => '0');
@@ -397,6 +423,48 @@ architecture rtl of vicx is
         return p(i * 4) & p(i * 4 + 1) & p(i * 4 + 2);
     end function;
 
+    -- the order register as places, 0 = in front: higher priority first,
+    -- ties sprite engine, VIC-II, layer 0, layer 1; sprites with the behind
+    -- bit right behind the source that follows the sprite engine
+    function order_pos(o : std_logic_vector(7 downto 0)) return pos_t is
+        type four_t is array (0 to 3) of natural range 0 to 4;
+        variable pri  : four_t;
+        variable sq   : four_t := (SP_SPR, SP_VIC, SP_L0, SP_L1);
+        variable t    : natural range 0 to 4;
+        variable pos  : pos_t;
+        variable n    : natural range 0 to 5 := 0;
+        variable pend : boolean := false;
+    begin
+        pri(0) := to_integer(unsigned(o(7 downto 6)));     -- in sq's starting order
+        pri(1) := to_integer(unsigned(o(5 downto 4)));
+        pri(2) := to_integer(unsigned(o(1 downto 0)));
+        pri(3) := to_integer(unsigned(o(3 downto 2)));
+        -- stable sort of the four sources, high priority first
+        for a in 0 to 2 loop
+            for c in 2 downto 0 loop
+                if c >= a and pri(c + 1) > pri(c) then
+                    t := pri(c); pri(c) := pri(c + 1); pri(c + 1) := t;
+                    t := sq(c); sq(c) := sq(c + 1); sq(c + 1) := t;
+                end if;
+            end loop;
+        end loop;
+        for k in 0 to 3 loop
+            pos(sq(k)) := to_unsigned(n, 3);
+            n := n + 1;
+            if sq(k) = SP_SPR then
+                pend := true;
+            elsif pend then
+                pos(SP_BEH) := to_unsigned(n, 3);
+                n := n + 1;
+                pend := false;
+            end if;
+        end loop;
+        if pend then
+            pos(SP_BEH) := to_unsigned(n, 3);
+        end if;
+        return pos;
+    end function;
+
     function byte_of(d : std_logic_vector(63 downto 0); n : unsigned(2 downto 0))
         return std_logic_vector is
         variable i : natural range 0 to 7;
@@ -471,12 +539,62 @@ begin
                 x => vx_x, q_idx => q_idx(n), q_ok => q_ok(n), q_late => q_late(n));
     end generate;
 
-    -- the frontmost opaque layer (the VIC-II's place in the order is
-    -- settled per pixel in the video process)
-    w_idx <= q_idx(0) when q_ok(0) = '1' and (q_ok(1) = '0' or ord_l0_l1 = '1') else
-             q_idx(1) when q_ok(1) = '1' else x"00";
-    w_ok  <= q_ok(0) or q_ok(1);
-    w_vf  <= ord_vic_l0 when q_ok(0) = '1' and (q_ok(1) = '0' or ord_l0_l1 = '1') else ord_vic_l1;
+    -- the frontmost opaque source other than the VIC-II (the VIC-II's
+    -- place in the order is settled per pixel in the video process)
+    winner : process (q_idx, q_ok, sp_front, sp_behind, line_pos, line_ctrl)
+        variable best : unsigned(2 downto 0);
+        variable idx  : std_logic_vector(7 downto 0);
+        variable ok   : std_logic;
+    begin
+        best := "111";
+        idx  := x"00";
+        ok   := '0';
+        if q_ok(0) = '1' and line_pos(SP_L0) < best then
+            best := line_pos(SP_L0); idx := q_idx(0); ok := '1';
+        end if;
+        if q_ok(1) = '1' and line_pos(SP_L1) < best then
+            best := line_pos(SP_L1); idx := q_idx(1); ok := '1';
+        end if;
+        if HAS_SPR and line_ctrl(2) = '1' then
+            if sp_front /= x"00" and line_pos(SP_SPR) < best then
+                best := line_pos(SP_SPR); idx := sp_front; ok := '1';
+            end if;
+            if sp_behind /= x"00" and line_pos(SP_BEH) < best then
+                best := line_pos(SP_BEH); idx := sp_behind; ok := '1';
+            end if;
+        end if;
+        w_idx <= idx;
+        w_ok  <= ok;
+        if line_pos(SP_VIC) < best then
+            w_vf <= '1';
+        else
+            w_vf <= '0';
+        end if;
+    end process;
+
+    -- the sprite engine and what it hears of the register space
+    x_done   <= pix_ce and vic_win;
+    sp_tw_a  <= sweep_ptr when sweeping = '1' else mem_waddr(11 downto 0);
+    sp_tw_d  <= x"00" when sweeping = '1' else mem_wdata;
+    sp_tw_we <= '1' when (regs_we = '1' or sweeping = '1') and sp_tw_a(11 downto 10) = "01" else '0';
+
+    gen_spr : if HAS_SPR generate
+        spr : entity work.vicx_sprites
+            port map (
+                clk => clk, reset => reset,
+                tw_we => sp_tw_we, tw_addr => sp_tw_a(9 downto 0), tw_data => sp_tw_d,
+                frame_start => frame_start, line_start => line_start,
+                raster_y => unsigned(raster_y), line_on => ctrl(2),
+                f_req => u_req(2), f_addr => u_addr(2), f_gnt => u_gnt(2),
+                f_valid => u_valid(2), f_data => u_data,
+                x => vx_x, x_done => x_done, q_front => sp_front, q_behind => sp_behind,
+                p_req => sp_preq, p_addr => sp_paddr, p_data => sp_pdata, p_ack => sp_pack,
+                coll_irq => sp_irq);
+    end generate;
+    gen_nospr : if not HAS_SPR generate
+        u_req(2)  <= '0';
+        u_addr(2) <= (others => '0');
+    end generate;
 
     -- palette entries 16-255 for the display: follow every write to them
     -- in the register space, and the clear after reset
@@ -568,6 +686,11 @@ begin
         variable wbe     : std_logic_vector(1 downto 0);
         variable wbv     : std_logic_vector(7 downto 0);
         variable dn      : natural range 0 to 3;
+        variable rbusy   : boolean;                -- the register-space write port is taken
+        variable rqn     : natural range 0 to 2;
+        variable k0, k1  : rqk_t;
+        variable u0, u1  : natural range 0 to 2;
+        variable needp   : boolean;
 
         -- a store to the register space (CPU port or DMA): what the display
         -- and the DMA engine keep copies of
@@ -647,8 +770,10 @@ begin
             regs_we <= '0';
             rd_kind <= RD_NONE;
             miss_r  <= '0';
-            u_gnt   <= "00";
-            u_valid <= "00";
+            u_gnt   <= "000";
+            u_valid <= "000";
+            sp_pack <= '0';
+            rbusy   := vic_cs = '1' and cpu_wr = '1';
             dmok    := false;
 
             bd := blk_data;
@@ -658,9 +783,36 @@ begin
             wqc := wq_count;
             wqw := wq_wr;
 
-            -- external VRAM engine: finish the request in hand first, so the
-            -- CPU access below sees a block that arrives in this clock
+            -- external VRAM engine: finish what is in hand first, so the CPU
+            -- access below sees a block that arrives in this clock
+            rqn := rq_n;
+            k0 := rq_k0; k1 := rq_k1;
+            u0 := rq_u0; u1 := rq_u1;
             if EXT_VRAM then
+                -- the oldest read's data
+                if vx_rvalid = '1' and rqn > 0 then
+                    case k0 is
+                        when K_DMA =>
+                            dmok := true;
+                        when K_LINE =>
+                            u_valid(u0) <= '1';
+                            u_data <= vx_rdata;
+                        when K_PORT =>
+                            if stale_v = '0' then
+                                for q in 0 to 1 loop
+                                    if region_of(port_addr(q)) = REG_VRAM and
+                                       port_addr(q)(16 downto 3) = f_blk then
+                                        bd(q) := vx_rdata;
+                                        bv(q) := '1';
+                                        ba(q) := f_blk;
+                                    end if;
+                                end loop;
+                            end if;
+                            pf_busy <= '0';
+                    end case;
+                    k0 := k1; u0 := u1;
+                    rqn := rqn - 1;
+                end if;
                 case eng is
                     when E_WREQ =>
                         if vx_ack = '1' then
@@ -676,30 +828,15 @@ begin
                             eng <= E_IDLE;
                         end if;
                     when E_RREQ =>
+                        -- taken: it joins the reads in flight
                         if vx_ack = '1' then
                             req_r <= '0';
-                            eng <= E_RWAIT;
-                        end if;
-                    when E_RWAIT =>
-                        if vx_rvalid = '1' and f_dma = '1' then
-                            dmok := true;
-                            eng <= E_IDLE;
-                        elsif vx_rvalid = '1' and f_line = '1' then
-                            -- a layer's block
-                            u_valid(f_lu) <= '1';
-                            u_data <= vx_rdata;
-                            eng <= E_IDLE;
-                        elsif vx_rvalid = '1' then
-                            if stale_v = '0' then
-                                for q in 0 to 1 loop
-                                    if region_of(port_addr(q)) = REG_VRAM and
-                                       port_addr(q)(16 downto 3) = f_blk then
-                                        bd(q) := vx_rdata;
-                                        bv(q) := '1';
-                                        ba(q) := f_blk;
-                                    end if;
-                                end loop;
+                            if rqn = 0 then
+                                k0 := cur_k; u0 := f_lu;
+                            else
+                                k1 := cur_k; u1 := f_lu;
                             end if;
+                            rqn := rqn + 1;
                             eng <= E_IDLE;
                         end if;
                     when E_IDLE =>
@@ -728,13 +865,18 @@ begin
                         br_i   <= br_i + 1;
                         br_n   <= br_n + 1;
                     end if;
-                elsif line_start = '0' and u_req /= "00" and u_gnt = "00" then
+                elsif line_start = '0' and u_req /= "000" and u_gnt = "000" then
+                    -- layers first (taking turns), then the sprites
                     if u_req(0) = '1' and (u_req(1) = '0' or u_pref = '0') then
                         dn := 0;
-                    else
+                    elsif u_req(1) = '1' then
                         dn := 1;
+                    else
+                        dn := 2;
                     end if;
-                    u_pref     <= not u_pref;
+                    if dn < 2 then
+                        u_pref <= not u_pref;
+                    end if;
                     u_gnt(dn)  <= '1';
                     br_u       <= dn;
                     br_blk     <= u_addr(dn);
@@ -822,8 +964,7 @@ begin
                                                         bd(q)(8 * bi + 7 downto 8 * bi) := cpu_din;
                                                     end if;
                                                 end loop;
-                                                if (eng = E_RREQ or eng = E_RWAIT) and
-                                                   f_blk = a(16 downto 3) then
+                                                if pf_busy = '1' and f_blk = a(16 downto 3) then
                                                     stale_v := '1';
                                                 end if;
                                             else
@@ -1084,8 +1225,7 @@ begin
                                         end loop;
                                     end if;
                                 end loop;
-                                if (eng = E_RREQ or eng = E_RWAIT) and f_dma = '0' and f_line = '0' and
-                                   f_blk = a(16 downto 3) then
+                                if pf_busy = '1' and f_blk = a(16 downto 3) then
                                     stale_v := '1';
                                 end if;
                                 dm_wbe <= "00";
@@ -1153,6 +1293,7 @@ begin
                                 end if;
                             when 2 =>
                                 -- one register-space store per clock the CPU leaves free
+                                rbusy     := true;
                                 regs_we   <= '1';
                                 mem_waddr <= "10" & dm_t(15 downto 0);
                                 mem_wdata <= dval;
@@ -1183,29 +1324,40 @@ begin
             -- layers take their own setups)
             if line_start = '1' then
                 line_ctrl <= ctrl;
-                -- higher priority in front; ties: sprites, VIC-II, layer 0, layer 1
-                if unsigned(s_order(1 downto 0)) >= unsigned(s_order(3 downto 2)) then
-                    ord_l0_l1 <= '1';
-                else
-                    ord_l0_l1 <= '0';
+                line_pos  <= order_pos(s_order);
+            end if;
+
+            -- the sprite engine's results into the register space, in clocks
+            -- the CPU and the DMA leave the write port free
+            if HAS_SPR then
+                if sp_preq = '1' and sp_pack = '0' and not rbusy then
+                    regs_we   <= '1';
+                    mem_waddr <= "10" & "0000" & sp_paddr;
+                    mem_wdata <= sp_pdata;
+                    regs_snoop(sp_paddr, sp_pdata);
+                    sp_pack   <= '1';
                 end if;
-                if unsigned(s_order(5 downto 4)) >= unsigned(s_order(1 downto 0)) then
-                    ord_vic_l0 <= '1';
-                else
-                    ord_vic_l0 <= '0';
-                end if;
-                if unsigned(s_order(5 downto 4)) >= unsigned(s_order(3 downto 2)) then
-                    ord_vic_l1 <= '1';
-                else
-                    ord_vic_l1 <= '0';
+                if sp_irq = '1' then
+                    irq_stat(0) <= '1';
                 end if;
             end if;
 
             -- external VRAM engine: start the next request.  Queued writes
             -- go first, so a fetch always sees every write queued before it.
+            -- Writes, port fetches and DMA reads wait until no read is in
+            -- flight; layer and sprite reads may follow one another (two in
+            -- flight), unless a write or a port fetch is waiting.
+            needp := false;
+            for q in 0 to 1 loop
+                if region_of(port_addr(q)) = REG_VRAM and not has_blk(bv, ba, q, port_addr(q)) then
+                    needp := true;
+                end if;
+            end loop;
             if EXT_VRAM and eng = E_IDLE then
                 if wqc > 0 and wq_count = 0 then
                     null;               -- a write queued this clock: next clock
+                elsif wq_count > 0 and rqn > 0 then
+                    null;               -- the write waits for the reads in flight
                 elsif wq_count > 0 then
                     addr_r <= std_logic_vector(to_unsigned(VRAM_BASE, 25) +
                                                resize(wq_addr(to_integer(wq_rd)), 25));
@@ -1215,13 +1367,13 @@ begin
                     req_r <= '1';
                     eng   <= E_WREQ;
                 else
-                    issued := false;
+                    issued := needp and rqn > 0;    -- a port fetch waits: nothing else goes
                     for q in 0 to 1 loop
-                        if region_of(port_addr(q)) = REG_VRAM and
+                        if rqn = 0 and region_of(port_addr(q)) = REG_VRAM and
                            not has_blk(bv, ba, q, port_addr(q)) then
                             f_blk   <= port_addr(q)(16 downto 3);
-                            f_line  <= '0';
-                            f_dma   <= '0';
+                            cur_k   <= K_PORT;
+                            pf_busy <= '1';
                             stale_v := '0';
                             addr_r  <= std_logic_vector(to_unsigned(VRAM_BASE, 25) +
                                        resize(port_addr(q)(16 downto 3) & "000", 25));
@@ -1233,17 +1385,21 @@ begin
                         end if;
                     end loop;
                     -- then the layers, taking turns
-                    if not issued and line_start = '0' and u_req /= "00" and u_gnt = "00" then
+                    if not issued and line_start = '0' and u_req /= "000" and u_gnt = "000" and
+                       (rqn = 0 or (rqn = 1 and k0 = K_LINE)) then
                         if u_req(0) = '1' and (u_req(1) = '0' or u_pref = '0') then
                             dn := 0;
-                        else
+                        elsif u_req(1) = '1' then
                             dn := 1;
+                        else
+                            dn := 2;
                         end if;
-                        u_pref    <= not u_pref;
+                        if dn < 2 then
+                            u_pref <= not u_pref;
+                        end if;
                         u_gnt(dn) <= '1';
                         f_lu      <= dn;
-                        f_line    <= '1';
-                        f_dma     <= '0';
+                        cur_k     <= K_LINE;
                         addr_r    <= std_logic_vector(to_unsigned(VRAM_BASE, 25) +
                                      resize(u_addr(dn) & "000", 25));
                         we_r      <= '0';
@@ -1252,7 +1408,7 @@ begin
                         issued    := true;
                     end if;
                     -- then the DMA engine
-                    if not issued and dmr_req = '1' then
+                    if not issued and dmr_req = '1' and rqn = 0 then
                         addr_r  <= std_logic_vector(dmr_addr);
                         din_r   <= dm_wd;
                         be_r    <= dm_wbe;
@@ -1262,13 +1418,16 @@ begin
                         if dmr_we = '1' then
                             eng <= E_DWREQ;
                         else
-                            f_dma  <= '1';
-                            f_line <= '0';
-                            eng    <= E_RREQ;
+                            cur_k <= K_DMA;
+                            eng   <= E_RREQ;
                         end if;
                     end if;
                 end if;
             end if;
+
+            rq_n  <= rqn;
+            rq_k0 <= k0; rq_k1 <= k1;
+            rq_u0 <= u0; rq_u1 <= u1;
 
             blk_data  <= bd;
             blk_valid <= bv;
@@ -1321,6 +1480,7 @@ begin
                 line_ctrl <= (others => '0');
                 l_set     <= (others => (others => '0'));
                 s_order   <= (others => '0');
+                line_pos  <= order_pos(x"00");
                 dm_st     <= DM_IDLE;
                 dm_busy   <= '0';
                 dm_c64    <= '0';
@@ -1340,7 +1500,7 @@ begin
                 -- the copies go; a fetch in flight is thrown away when it
                 -- lands; queued writes still go out
                 blk_valid <= "00";
-                if eng = E_RREQ or eng = E_RWAIT then
+                if pf_busy = '1' then
                     f_stale <= '1';
                 end if;
             end if;

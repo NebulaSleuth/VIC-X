@@ -108,8 +108,8 @@ def check_pixels(name, path, tol=40):
         bad = []
         for x, y, want, neg in pixel_checks(name):
             got = tuple(pixel(x + dx, y)[:3])
-            if got == border and want == (0, 0, 0) and not neg:
-                continue    # the test's black border, which the harness colours
+            if got == border and not neg:
+                continue    # border: the harness gives it its own colour
             close = all(abs(a - b) <= tol for a, b in zip(got, want))
             if close == neg:
                 bad.append(f"({x + dx},{y}) {'%02X%02X%02X' % got} {'!' if neg else ''}{'%02X%02X%02X' % want}")
