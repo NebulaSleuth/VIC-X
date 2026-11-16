@@ -1,6 +1,6 @@
 # Plan: VRAM in the MiSTer's SDRAM
 
-Status: controller built and simulated; VIC-X not yet using it. For the MiSTer build (C64X core,
+Status: built and running on the MiSTer; VRAM is in SDRAM. For the MiSTer build (C64X core,
 `D:\Repos\C64X_MiSTer`, branch `vicx`). The spec does not change; the
 VHDL block keeps a block-RAM VRAM option for simulation and other boards.
 
@@ -125,7 +125,14 @@ deadlines could be missed. Kept as a fallback.
   and a testbench of random traffic from every owner plus a VIC-X client.
   It passes with 0-9 ns of extra read data delay (board and pins) and
   fails, as it should, from 11 ns; the limit worked out is about 10.5 ns.
-- Not yet: VIC-X using the port (VRAM is still block RAM), hardware runs.
+- Done: `vicx.vhd` with `EXT_VRAM`: port read-ahead, write queue, snooping
+  (see `hdl/README.md`); the C64X core uses it. Block RAM 401 of 553 (was
+  528), logic 62%, timing met.
+- On the MiSTer (2026-11-15): step 1 tests as before, `tests/hw/ram_check`,
+  `reu_check` (16 MB) and `vram_check` (all 128 KB both ways, step-640 reads
+  four cycles apart, write then read on the other port) pass.
+- Not yet: EasyFlash cartridges; turbo (VIC-X would lose the turbo slots);
+  the conflict flag and vx_miss are not visible on the hardware.
 
 ## Changes to VIC-X (`hdl/vicx.vhd`)
 
