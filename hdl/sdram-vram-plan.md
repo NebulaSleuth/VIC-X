@@ -1,6 +1,6 @@
 # Plan: VRAM in the MiSTer's SDRAM
 
-Status: plan, nothing built. For the MiSTer build (C64X core,
+Status: controller built and simulated; VIC-X not yet using it. For the MiSTer build (C64X core,
 `D:\Repos\C64X_MiSTer`, branch `vicx`). The spec does not change; the
 VHDL block keeps a block-RAM VRAM option for simulation and other boards.
 
@@ -46,33 +46,46 @@ VRAM ahead of the display instead of pixel by pixel.
    bytes back, so nothing outside the controller changes, but VRAM gets
    whole 16-bit words. Without this, with the REU on the high lanes, VRAM
    would only have the low lane and half the bandwidth.
-2. **Burst length 4 for reads.** In the same 8-clock slot: ACTIVE at 0,
-   READ with auto precharge at 2, data at 4-7, which is 8 bytes. Checked
-   against MT48LC16M16-class timing at 15.86 ns per clock: tRCD 31.7 ns
-   (18-20 needed), tRAS from ACTIVE to precharge 95 ns (42), bank idle by
-   clock 8 (tRP 18-20), tRC 127 ns (60). Every slot still opens and closes
-   its own row, so slots stay independent. C64 reads take the word they
-   need. C64 commands keep their present clocks, so the C64's timing does
-   not change.
-3. **Writes:** single-word writes as now (DQM picks the byte). VIC-X writes
+2. **The core's own accesses are unchanged**: burst length 1, the same
+   commands on the same clocks. A first idea, burst length 4 for every
+   read, does not work: the core takes read data on a rising edge about
+   5 ns after the chip's data hold time, which works only because the bus
+   floats afterwards and keeps its value. With bursts the next word would
+   be on the bus by then.
+3. **A VIC-X read is four single-word READs** on consecutive clocks in the
+   open row, then PRECHARGE: ACTIVE at e1, READ at e3-e6, PRECHARGE at e7,
+   8 bytes per 8-clock slot. Each word is taken on the falling edge of clk,
+   in the middle of its valid window. At 15.86 ns per clock: tRCD 31.7 ns
+   (18-20 needed), tRAS 95 ns (42), tRP 31.7 ns before the next slot (18-20),
+   tRC 127 ns (60).
+4. **Writes:** single-word writes as now (DQM picks the byte). VIC-X writes
    1 or 2 bytes per slot.
-4. **VIC-X takes idle slots.** Each slot keeps its owner; when the owner
-   has no request, a VIC-X request goes in instead. VIC-X region: 128 KB at
-   `$0100000` (to confirm above).
-5. **Turbo.** With VIC-X fetching, VIC-X goes before the turbo slots
-   (CPU0/4/8), so turbo is best effort. MiSTer build only; not a spec
-   matter. (The alternative, losing VIC-X fetches to turbo, breaks the
-   per-line sprite limits.)
+5. **VIC-X takes idle slots.** The core marks each slot's start and the
+   slots VIC-X may use. When such a slot starts with no owner request and
+   no refresh, a VIC-X request takes it. VIC-X region: 128 KB at
+   `$0100000`. Checked: cartridge RAM is `$0010000-$001FFFF`, cartridge ROM
+   `$0200000-$03FFFFF`, GeoRAM `$0C00000-$0FFFFFF`, the erase at start covers
+   `$0000000-$001FFFF`.
+6. **Which slots.** Only slots whose owners always start their request in
+   the slot's first state: the REU slot (DMA0) and the turbo CPU slots
+   (CPU0/4/8). The EXT slots are left out for now: the EasyFlash's flash
+   (`am29f040.sv`) can raise its request in the middle of an io slot. The
+   controller has a `conflict` flag that goes high if an owner request ever
+   starts during a VIC-X access.
+7. **Turbo.** Turbo CPU cycles are owners, so with turbo on VIC-X loses
+   those slots. Planned for the fetcher (step 2): with VIC-X fetching, VIC-X
+   goes before turbo, so turbo is best effort. MiSTer build only; not a
+   spec matter.
 
 ## Bandwidth
 
-Supply, VIC-X slots per PAL line (63 C64 cycles):
+Supply, VIC-X slots per PAL line (63 C64 cycles), with the slots above:
 
 | Situation | Free slots per C64 cycle | Slots per line | Bytes per line |
 |-----------|--------------------------|----------------|----------------|
-| nothing loading, no REU DMA, turbo off | CPU0/4/8, EXT0-3, EXT4-7 3 times in 4: 5.75 | 362 | 2900 |
-| REU DMA running | 4.75 | 299 | 2390 |
-| guaranteed (CPU0/4/8 only) | 3 | 189 | 1510 |
+| no REU DMA, turbo off | DMA0, CPU0/4/8: 4 | 252 | 2016 |
+| REU DMA running | 3 | 189 | 1512 |
+| later, with the EXT slots too | up to 5.75 | 362 | 2900 |
 
 NTSC lines have 65 cycles, slightly more.
 
@@ -90,20 +103,29 @@ to the full visible width (about 384 pixels):
 | total, worst | | about 254 |
 
 So: 8x8 tile rows are what cost the most, one slot per 8 bytes whatever the
-pixel depth. The worst case fits when nothing is loading, REU DMA included,
-but not in the guaranteed 3 slots alone. Normal content (one bitmap layer
-plus 32 16-pixel sprites, about 130 slots) fits even in those. The rest of
-each line, and the lines outside the display, go to DMA.
+pixel depth. With the four slots the worst case is just at the limit (252
+against about 254), and over it during REU DMA. Normal content (one bitmap
+layer plus 32 16-pixel sprites, about 130 slots) fits with room to spare.
+The rest of each line, and the lines outside the display, go to DMA.
 
-If this proves too tight, the next step is the same slot grid at twice the
-clock (126 MHz, one more PLL output that scales with the NTSC switch):
-CAS latency 3, two BL4 reads per slot to different banks, double the supply.
-Faster, but more timing risk on the MiSTer's SDRAM board.
+Ways to more room, in order: the EXT slots once the flash's request timing
+is handled; then the same slot grid at twice the clock (126 MHz, one more
+PLL output that scales with the NTSC switch), which doubles the supply but
+adds timing risk on the MiSTer's SDRAM board.
 
 Other option considered: the HPS DDR3 (`DDRAM_*`, already used by the
 drive). Plenty of bandwidth and no change to the C64's controller, but its
 latency is not fixed (Linux on the ARM and the drive share it), so per-line
 deadlines could be missed. Kept as a fallback.
+
+## Status
+
+- Done: `rtl/sdram_vicx.vhd` in the C64X core (replaces `sdram.v`), with
+  `sim/` (GHDL): a chip model with timing checks and data valid windows,
+  and a testbench of random traffic from every owner plus a VIC-X client.
+  It passes with 0-9 ns of extra read data delay (board and pins) and
+  fails, as it should, from 11 ns; the limit worked out is about 10.5 ns.
+- Not yet: VIC-X using the port (VRAM is still block RAM), hardware runs.
 
 ## Changes to VIC-X (`hdl/vicx.vhd`)
 
@@ -129,11 +151,11 @@ Block RAM after the move: about 400 of 553 used.
 
 ## Order of work
 
-1. Controller in VHDL with word-packed lanes, BL4 reads and the idle-slot
-   arbiter. GHDL testbench with a timing-checking SDRAM model (our own;
+1. (Done) Controller in VHDL with word-packed lanes, VIC-X reads of 8
+   bytes and the idle-slot arbiter. GHDL testbench with a timing-checking SDRAM model (our own;
    the vendor models' licences are unclear). It checks that C64 slots issue
-   the same commands on the same clocks as now, and that VIC-X bursts keep
-   tRCD/tRAS/tRP/tRC.
+   the same commands on the same clocks as before, and that VIC-X reads
+   keep tRCD/tRAS/tRP/tRC.
 2. `vicx.vhd`: memory interface, port read-ahead with write snooping, write
    queue. The step 1 testbench runs against a memory model with random
    latency, so read-ahead is tested.
@@ -142,6 +164,5 @@ Block RAM after the move: about 400 of 553 used.
    core's own memory users still work.
 4. Then step 2's layer fetcher on the same interface.
 
-To check first: the free region at `$0100000` (all of `cartridge.v`, tape
-size limit), and that no core user relies on the old byte-lane order (a
-16-bit read somewhere).
+Checked: the free region at `$0100000`, and no core user reads 16 bits or
+depends on the old byte-lane order (all use the 8-bit `dout`).
