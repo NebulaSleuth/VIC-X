@@ -52,12 +52,17 @@ def scp(src, dst):
         sys.exit(f"scp failed: {src} -> {dst}\n{r.stderr}")
 
 
+def source(name):
+    src = TESTS / f"{name}.s"
+    return src if src.exists() else HERE / f"{name}.s"
+
+
 def assemble(name):
     OUT.mkdir(parents=True, exist_ok=True)
     obj, prg = OUT / f"{name}.o", OUT / f"{name}.prg"
     subprocess.run([str(CC65 / "ca65"), "-D", "HW_RESULT",
                     "-I", str(REPO / "include"), "-I", str(TESTS / "lib"),
-                    "-o", str(obj), str(TESTS / f"{name}.s")], check=True)
+                    "-o", str(obj), str(source(name))], check=True)
     subprocess.run([str(CC65 / "ld65"), "-C", str(TESTS / "lib" / "test.cfg"),
                     "-o", str(prg), str(obj)], check=True)
     return prg
@@ -90,7 +95,9 @@ def main():
 
     names = DEFAULT_TESTS
     if args.names:
-        names = [n for n in (p.stem for p in sorted(TESTS.glob("t*.s")))
+        # conformance tests, and the hardware checks in tests/hw
+        sources = sorted(TESTS.glob("t*.s")) + sorted(HERE.glob("*.s"))
+        names = [n for n in (p.stem for p in sources)
                  if any(s in n for s in args.names)]
 
     ssh(args.host, f"mkdir -p {REMOTE_DIR} {SHOTS}")
