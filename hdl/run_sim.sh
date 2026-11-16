@@ -31,4 +31,5 @@ run tb_vicx_step2 -gEXT=true
 run tb_vicx_step2 -gEXT=true -gREU=true
 run tb_vicx_step3 -gEXT=true
 run tb_vicx_step4 -gEXT=true
+run tb_vicx_wide -gEXT=true
 exit $status

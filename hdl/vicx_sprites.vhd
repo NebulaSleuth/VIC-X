@@ -43,6 +43,9 @@ entity vicx_sprites is
         line_start  : in  std_logic;
         raster_y    : in  unsigned(8 downto 0);
         line_on     : in  std_logic;                        -- CTRL bit 2, this line
+        win_first   : in  unsigned(8 downto 0);             -- the window's raster lines
+        win_last    : in  unsigned(8 downto 0);
+        width       : in  unsigned(8 downto 0);             -- window width
 
         f_req       : out std_logic;
         f_addr      : out unsigned(13 downto 0);
@@ -67,9 +70,7 @@ end entity;
 
 architecture rtl of vicx_sprites is
 
-    constant WIN_TOP : natural := 51;
-    constant WIN_H   : natural := 200;
-    constant WIDTH   : natural := 320;
+    signal l_width   : natural range 0 to 511 := 320;  -- the prepared line's width
 
     type byte_ram is array (0 to 127) of std_logic_vector(7 downto 0);
     type entry_ram is array (0 to 127) of std_logic_vector(63 downto 0);
@@ -78,8 +79,9 @@ architecture rtl of vicx_sprites is
     type nib_t is array (0 to 31) of std_logic_vector(3 downto 0);
     type sel2_t is array (0 to 3) of sel_t;      -- four lines' lists
     type nib2_t is array (0 to 3) of nib_t;
-    type rowbuf_t is array (0 to 63) of std_logic_vector(7 downto 0);
+    type rowbuf_t is array (0 to 7) of std_logic_vector(63 downto 0);  -- up to 8 blocks
     type rowbuf2_t is array (0 to 1) of rowbuf_t;
+    type off2_t is array (0 to 1) of unsigned(2 downto 0);
     type pair_ram is array (0 to 127) of std_logic_vector(15 downto 0);
     type seen_ram is array (0 to 127) of std_logic_vector(127 downto 0);
     type fifo_t is array (0 to 255) of std_logic_vector(33 downto 0);
@@ -129,6 +131,8 @@ architecture rtl of vicx_sprites is
     signal rdy       : std_logic_vector(1 downto 0) := "00";      -- row buffer filled
     signal rbuf      : rowbuf2_t := (others => (others => (others => '0')));
     signal r_addr    : unsigned(16 downto 0) := (others => '0');  -- row start
+    signal r_k       : natural range 0 to 7 := 0;                 -- block of the row
+    signal r_off     : off2_t := (others => (others => '0'));     -- row start in its first block
     signal r_len     : natural range 0 to 64 := 0;
     signal r_blk     : unsigned(13 downto 0) := (others => '0');
     signal req_r     : std_logic := '0';
@@ -156,12 +160,22 @@ architecture rtl of vicx_sprites is
     -- collisions
     signal fifo      : fifo_t := (others => (others => '0'));
     signal f_wp, f_rp : unsigned(7 downto 0) := (others => '0');
+    signal fifo_q    : std_logic_vector(33 downto 0) := (others => '0');
+    signal fifo_we   : std_logic := '0';
+    signal f_wp_d    : unsigned(7 downto 0) := (others => '0');  -- entries in the RAM
+    signal fifo_wa   : unsigned(7 downto 0) := (others => '0');
+    signal fifo_wd   : std_logic_vector(33 downto 0) := (others => '0');
+    signal pairs_we  : std_logic := '0';
+    signal pairs_wa  : natural range 0 to 127 := 0;
+    signal pairs_wd  : std_logic_vector(15 downto 0) := (others => '0');
+    signal pairs_ra  : natural range 0 to 127 := 0;
+    signal pairs_q   : std_logic_vector(15 downto 0) := (others => '0');
     signal c_mask    : std_logic_vector(31 downto 0) := (others => '0');
     signal c_cb      : natural range 0 to 3 := 0;
     signal c_e1      : std_logic_vector(7 downto 0) := (others => '0');
     signal c_j       : std_logic_vector(31 downto 0) := (others => '0');
     signal c_row     : std_logic_vector(127 downto 0) := (others => '0');
-    type cst_t is (C_IDLE, C_LOW, C_RD, C_LOAD, C_PAIRS);
+    type cst_t is (C_IDLE, C_TAKE, C_LOW, C_RD, C_LOAD, C_PAIRS);
     signal cst       : cst_t := C_IDLE;
     signal pairs     : pair_ram := (others => (others => '0'));
     signal pcount    : natural range 0 to 127 := 0;
@@ -176,7 +190,7 @@ architecture rtl of vicx_sprites is
     signal seen_wd   : std_logic_vector(127 downto 0) := (others => '0');
 
     -- publishing
-    type pst_t is (W_IDLE, W_WAIT, W_STAT, W_PAIRS, W_CLEAR);
+    type pst_t is (W_IDLE, W_WAIT, W_STAT, W_PAIRS, W_PDATA, W_CLEAR);
     signal pst       : pst_t := W_IDLE;
     signal pi        : natural range 0 to 255 := 0;
     signal preq_r    : std_logic := '0';
@@ -184,6 +198,7 @@ architecture rtl of vicx_sprites is
     signal pdata_r   : std_logic_vector(7 downto 0) := (others => '0');
     signal irq_r     : std_logic := '0';
     signal clr_i     : natural range 0 to 128 := 128;
+    signal pdata_wait : std_logic := '0';
 
     function lowest(v : std_logic_vector(31 downto 0)) return natural is
     begin
@@ -272,6 +287,26 @@ begin
     s_q  <= q1 when draw_b = '0' else q0;
     s_ra <= to_integer(x);
 
+    fifo_mem : process (clk)
+    begin
+        if rising_edge(clk) then
+            if fifo_we = '1' then
+                fifo(to_integer(fifo_wa)) <= fifo_wd;
+            end if;
+            fifo_q <= fifo(to_integer(f_rp));
+        end if;
+    end process;
+
+    pairs_mem : process (clk)
+    begin
+        if rising_edge(clk) then
+            if pairs_we = '1' then
+                pairs(pairs_wa) <= pairs_wd;
+            end if;
+            pairs_q <= pairs(pairs_ra);
+        end if;
+    end process;
+
     seen_mem : process (clk)
     begin
         if rising_edge(clk) then
@@ -308,11 +343,15 @@ begin
         variable rw     : std_logic_vector(127 downto 0);
         variable stop   : boolean;
         variable slot   : natural range 0 to 1;
+        variable bpos   : natural range 0 to 127;
     begin
         if rising_edge(clk) then
             d_we    <= '0';
             s_we    <= '0';
             seen_we <= '0';
+            fifo_we <= '0';
+            pairs_we <= '0';
+            f_wp_d  <= f_wp;
             irq_r   <= '0';
             lat_v   <= '0';
             got     := false;
@@ -438,18 +477,18 @@ begin
                         ra := shift_left(resize(unsigned(e(47 downto 32)), 22), 5) +
                               to_unsigned(row * rl, 22);
                         r_addr <= ra(16 downto 0);
+                        r_k    <= 0;
+                        r_off(slot) <= ra(2 downto 0);
                         r_blk  <= ra(16 downto 3);
                         r_len  <= rl;
                         fst    <= F_BLK;
                     end if;
                 when F_BLK =>
                     if got then
-                        for n in 0 to 7 loop
-                            o := to_integer(addr_r & to_unsigned(n, 3)) - to_integer(r_addr);
-                            if o >= 0 and o < r_len then
-                                rbuf(slot)(o) <= dat(8 * n + 7 downto 8 * n);
-                            end if;
-                        end loop;
+                        rbuf(slot)(r_k) <= dat;
+                        if r_k < 7 then
+                            r_k <= r_k + 1;
+                        end if;
                         last := r_addr + to_unsigned(r_len - 1, 17);
                         if addr_r = last(16 downto 3) then
                             rdy(slot) <= '1';
@@ -489,9 +528,11 @@ begin
                         if e(53) = '1' then px := di / 2; else px := di; end if;
                         if e(14) = '1' then px := w - 1 - px; end if;       -- flip X
                         if e(52) = '1' then
-                            c := rbuf(slot)(px);
+                            bpos := to_integer(r_off(slot)) + px;
+                            c := rbuf(slot)(bpos / 8)(8 * (bpos mod 8) + 7 downto 8 * (bpos mod 8));
                         else
-                            b := rbuf(slot)(px / 2);
+                            bpos := to_integer(r_off(slot)) + px / 2;
+                            b := rbuf(slot)(bpos / 8)(8 * (bpos mod 8) + 7 downto 8 * (bpos mod 8));
                             if px mod 2 = 0 then
                                 c := x"0" & b(7 downto 4);
                             else
@@ -501,7 +542,7 @@ begin
                                 c := e(51 downto 48) & c(3 downto 0);
                             end if;
                         end if;
-                        if to_integer(sx) < WIDTH and c /= x"00" then
+                        if to_integer(sx) < l_width and c /= x"00" then
                             d_ra    <= to_integer(sx);
                             dp1_v   <= '1';
                             dp1_sx  <= to_integer(sx);
@@ -528,7 +569,9 @@ begin
                 s_wa <= to_integer(x);
                 m := s_q(47 downto 16);
                 if shown_on = '1' and two_or_more(m) and m /= last_m and f_wp + 1 /= f_rp then
-                    fifo(to_integer(f_wp)) <= std_logic_vector(sel_cb_bit) & m;
+                    fifo_we <= '1';
+                    fifo_wd <= std_logic_vector(sel_cb_bit) & m;
+                    fifo_wa <= f_wp;
                     f_wp <= f_wp + 1;
                 end if;
                 last_m <= m;
@@ -537,15 +580,19 @@ begin
             -- collisions: the pairs at each queued pixel, one a clock
             case cst is
                 when C_IDLE =>
-                    if f_rp /= f_wp then
-                        c_mask <= fifo(to_integer(f_rp))(31 downto 0);
-                        c_cb   <= to_integer(unsigned(fifo(to_integer(f_rp))(33 downto 32)));
-                        f_rp   <= f_rp + 1;
-                        -- a pixel from three lines back: its list is being
-                        -- reused for the next line, so it is dropped
-                        if unsigned(fifo(to_integer(f_rp))(33 downto 32)) /= sel_nb then
-                            cst <= C_LOW;
-                        end if;
+                    if f_rp /= f_wp_d then
+                        cst <= C_TAKE;                      -- the entry comes next clock
+                    end if;
+                when C_TAKE =>
+                    c_mask <= fifo_q(31 downto 0);
+                    c_cb   <= to_integer(unsigned(fifo_q(33 downto 32)));
+                    f_rp   <= f_rp + 1;
+                    -- a pixel from three lines back: its list is being
+                    -- reused for the next line, so it is dropped
+                    if unsigned(fifo_q(33 downto 32)) /= sel_nb then
+                        cst <= C_LOW;
+                    else
+                        cst <= C_IDLE;
                     end if;
                 when C_LOW =>
                     -- the lowest sprite left, and those above it that it meets
@@ -588,7 +635,9 @@ begin
                         if pcount >= 127 then
                             collfull <= '1';
                         else
-                            pairs(pcount) <= c_e1 & sel_e(cb)(j);
+                            pairs_we <= '1';
+                            pairs_wa <= pcount;
+                            pairs_wd <= c_e1 & sel_e(cb)(j);
                             pcount <= pcount + 1;
                         end if;
                     end if;
@@ -607,7 +656,7 @@ begin
             -- next one is prepared
             if line_start = '1' then
                 shown_on <= '0';
-                if to_integer(raster_y) >= WIN_TOP and to_integer(raster_y) < WIN_TOP + WIN_H then
+                if raster_y >= win_first and raster_y <= win_last then
                     shown_on <= line_on;
                     if line_on = '1' and ovf_next = '1' then
                         overflow <= '1';
@@ -639,8 +688,9 @@ begin
                 if f_gnt = '1' then
                     waiting <= '1';
                 end if;
-                py <= resize(raster_y, 10) + 1 - WIN_TOP;
-                if to_integer(raster_y) + 1 >= WIN_TOP and to_integer(raster_y) + 1 < WIN_TOP + WIN_H then
+                py <= resize(raster_y, 10) + 1 - resize(win_first, 10);
+                l_width <= to_integer(width);
+                if raster_y + 1 >= win_first and raster_y + 1 <= win_last then
                     st <= P_SEL;
                 else
                     st <= P_IDLE;
@@ -650,7 +700,7 @@ begin
             -- after the window: publish status, count and pairs
             case pst is
                 when W_IDLE =>
-                    if line_start = '1' and to_integer(raster_y) = WIN_TOP + WIN_H then
+                    if line_start = '1' and raster_y = win_last + 1 then
                         pst <= W_WAIT;
                     end if;
                 when W_WAIT =>
@@ -680,14 +730,25 @@ begin
                             clr_i    <= 0;
                             pst      <= W_CLEAR;
                         else
-                            paddr_r <= to_unsigned(16#901# + pi, 12);
-                            if pi mod 2 = 0 then
-                                pdata_r <= pairs(pi / 2)(15 downto 8);
-                            else
-                                pdata_r <= pairs(pi / 2)(7 downto 0);
-                            end if;
-                            pi <= pi + 1;
+                            preq_r   <= '0';            -- the pair comes next clock
+                            pairs_ra <= pi / 2;
+                            pst      <= W_PDATA;
                         end if;
+                    end if;
+                when W_PDATA =>
+                    if preq_r = '0' and pdata_wait = '0' then
+                        pdata_wait <= '1';          -- pairs_q follows pairs_ra
+                    else
+                        pdata_wait <= '0';
+                        paddr_r <= to_unsigned(16#901# + pi, 12);
+                        if pi mod 2 = 0 then
+                            pdata_r <= pairs_q(15 downto 8);
+                        else
+                            pdata_r <= pairs_q(7 downto 0);
+                        end if;
+                        pi     <= pi + 1;
+                        preq_r <= '1';
+                        pst    <= W_PAIRS;
                     end if;
                 when W_CLEAR =>
                     -- forget the pairs seen this frame

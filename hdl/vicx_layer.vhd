@@ -33,6 +33,7 @@ entity vicx_layer is
         enable     : in  std_logic;                        -- CTRL bit, this line
         win_y      : in  unsigned(8 downto 0);             -- window line
         in_win     : in  std_logic;                        -- the line is in the window
+        width      : in  unsigned(8 downto 0);             -- window width (320-384)
         setup      : in  std_logic_vector(119 downto 0);   -- bytes 0-14, byte n at 8n
 
         f_req      : out std_logic;
@@ -152,6 +153,7 @@ begin
         variable px      : row_t;
         variable o       : integer range -32 to 32;
         variable nb, w   : natural range 0 to 512;
+        variable wpx     : natural range 0 to 511;
         variable ly      : unsigned(11 downto 0);
         variable lx0     : unsigned(11 downto 0);
         variable tsz     : natural range 8 to 16;
@@ -373,8 +375,9 @@ begin
                 l_dw   <= mode(3);
                 l_big  <= mode(2);
                 l_bank <= sbyte(setup, 14)(3 downto 0);
-                if mode(0) = '1' then w := 320; else w := 160; end if;
-                if mode(3) = '1' then w := w / 2; end if;      -- bitmap bytes
+                wpx := to_integer(width);
+                if mode(3) = '1' then wpx := (wpx + 1) / 2; end if;   -- layer pixels
+                if mode(0) = '1' then w := wpx; else w := (wpx + 1) / 2; end if;   -- bitmap bytes
                 k        <= 0;
                 wd       := 0;
                 mc_valid <= '0';
@@ -394,7 +397,7 @@ begin
                     -- bitmap: base + y * stride
                     row := resize(unsigned(sbyte(setup, 4)(0 downto 0)) & unsigned(sbyte(setup, 3)) &
                                   unsigned(sbyte(setup, 2)), 19) +
-                           resize(win_y(7 downto 0) * (unsigned(sbyte(setup, 13)(2 downto 0)) &
+                           resize(win_y * (unsigned(sbyte(setup, 13)(2 downto 0)) &
                                                        unsigned(sbyte(setup, 12))), 19);
                     l_on   <= '1';
                     l_bmp  <= '1';
@@ -410,7 +413,7 @@ begin
                     if mode(2) = '1' then tsz := 16; else tsz := 8; end if;
                     mw := 32 * 2 ** to_integer(unsigned(sbyte(setup, 1)(1 downto 0)));
                     mh := 32 * 2 ** to_integer(unsigned(sbyte(setup, 1)(3 downto 2)));
-                    if mode(3) = '1' then nb := 160; else nb := 320; end if;   -- layer pixels
+                    nb := wpx;                                  -- layer pixels
                     ly  := (resize(win_y, 12) + sy) and to_unsigned(mh * tsz - 1, 12);
                     lx0 := sx and to_unsigned(mw * tsz - 1, 12);
                     l_on   <= '1';

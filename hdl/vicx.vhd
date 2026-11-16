@@ -33,6 +33,14 @@
 --   border) and vic_win (the pixel is in the 320x200 display window, lines
 --   51-250, the area the border opens on with 40 columns and 25 rows).
 --
+-- Wide window
+--   $20842-$20845 move the window's left, right, top and bottom edges out
+--   into the border, up to 32 pixels each side, 35 lines up and 37 down
+--   (the visible frame); top and bottom are latched per frame, left and
+--   right per line.  Layers and sprites count pixels from the widened
+--   corner.  The horizontal position comes from counting pix_ce from
+--   line_start, with the 320x200 area's first pixel learned from vic_win.
+--
 -- Layers (vicx_layer.vhd)
 --   CTRL, the layer setups and the layer order are latched at line_start.
 --   Each layer fetches its line from then on, in 8-byte blocks, into a line
@@ -56,6 +64,12 @@
 --   discarded and made again.  A read that finds no copy ready gets $FF and
 --   pulses vx_miss: that needs reads closer together than any 6510 code
 --   makes them, or a memory too slow for this block.
+--
+-- XRAM windows (CAP_FEAT bit 4)
+--   bus_addr is the address of the CPU's access, or the REU's on the C64
+--   side; win_hit says a window takes it, and win_addr is the SDRAM
+--   address it goes to instead (the core makes the access a RAM access
+--   there, so it reads and writes XRAM over RAM, ROM, I/O and cartridge).
 --
 -- DMA engine (EXT_VRAM and CAP_FEAT bit 3)
 --   Every space is reached through the vx_* port: C64 RAM at C64_BASE, VRAM
@@ -138,7 +152,13 @@ entity vicx is
         vx_rdata     : in  std_logic_vector(63 downto 0) := (others => '0');
         vx_rvalid    : in  std_logic := '0';
         vx_miss      : out std_logic;
-        cpu_halt     : out std_logic                       -- DMA touching C64 RAM: hold the CPU
+        cpu_halt     : out std_logic;                      -- DMA touching C64 RAM: hold the CPU
+
+        -- XRAM windows: the address of the CPU's (or the REU's) access to
+        -- C64 memory, and whether a window takes it, with its SDRAM address
+        bus_addr     : in  std_logic_vector(15 downto 0) := (others => '0');
+        win_hit      : out std_logic;
+        win_addr     : out std_logic_vector(24 downto 0)
     );
 end entity;
 
@@ -330,6 +350,26 @@ architecture rtl of vicx is
     signal win_y      : unsigned(8 downto 0);
     signal in_win     : std_logic;
 
+    -- the wide window: edges as written ($20842-$20845: left, right, top,
+    -- bottom), top and bottom latched per frame, left and right per line,
+    -- each stopped at the edge of the visible frame (VICE's PAL screen:
+    -- 32 pixels each side, 35 lines above the 320x200 area, 37 below)
+    type wide_t is array (0 to 3) of unsigned(7 downto 0);
+    signal s_wide     : wide_t := (others => (others => '0'));
+    signal f_top      : unsigned(5 downto 0) := (others => '0');
+    signal f_bot      : unsigned(5 downto 0) := (others => '0');
+    signal l_left     : unsigned(5 downto 0) := (others => '0');
+    signal l_right    : unsigned(5 downto 0) := (others => '0');
+    signal c_left, c_right : unsigned(5 downto 0);
+    signal win_w      : unsigned(8 downto 0);        -- this line's window width
+    signal win_first  : unsigned(8 downto 0);        -- the window's first and last raster lines
+    signal win_last   : unsigned(8 downto 0);
+    signal line_in    : std_logic := '0';            -- this line is in the window
+    signal hx         : unsigned(8 downto 0) := (others => '0');   -- pixel in the line
+    signal wx0        : unsigned(8 downto 0) := to_unsigned(136, 9); -- the 320x200 area's first pixel
+    signal vic_win_d  : std_logic := '0';
+    signal in_wwin    : std_logic;                   -- the pixel coming in is in the window
+
     -- the sprite engine
     signal sp_front   : std_logic_vector(7 downto 0) := (others => '0');
     signal sp_behind  : std_logic_vector(7 downto 0) := (others => '0');
@@ -493,6 +533,43 @@ begin
     lay_late <= late_r;
     cpu_halt <= dm_c64;
 
+    -- XRAM windows: W0 and W1, each in one of the slots $2000, $4000,
+    -- $6000, $8000, $A000 or $E000 (codes 0-5) when bit 7 of its slot
+    -- register is set; W0 wins if both sit in one slot.  Page n of XRAM
+    -- (8 KB each) shows there, over RAM, ROM and cartridge whatever $01
+    -- says.  Without XRAM no window takes an access (VICE reads $FF there).
+    win_dec : process (bus_addr, win, xram_mb, xmask)
+        variable code : integer range -1 to 5;
+        variable hit  : boolean;
+        variable xa   : unsigned(23 downto 0);
+    begin
+        case bus_addr(15 downto 13) is
+            when "001"  => code := 0;
+            when "010"  => code := 1;
+            when "011"  => code := 2;
+            when "100"  => code := 3;
+            when "101"  => code := 4;
+            when "111"  => code := 5;
+            when others => code := -1;
+        end case;
+        hit := false;
+        xa  := (others => '0');
+        for w in 1 downto 0 loop                    -- W0 last, so it wins
+            if code >= 0 and win(3 * w + 2)(7) = '1' and
+               to_integer(unsigned(win(3 * w + 2)(2 downto 0))) = code then
+                hit := true;
+                xa  := unsigned(win(3 * w + 1)(2 downto 0)) & unsigned(win(3 * w)) &
+                       unsigned(bus_addr(12 downto 0));
+            end if;
+        end loop;
+        if hit and unsigned(xram_mb) /= 0 then
+            win_hit <= '1';
+        else
+            win_hit <= '0';
+        end if;
+        win_addr <= std_logic_vector(to_unsigned(XRAM_BASE, 25) + resize(xa and xmask, 25));
+    end process;
+
     -- XRAM wraps at its size (a power of two MB; 16 MB and up: 24 bits)
     xmask <= (others => '1') when unsigned(xram_mb) >= 16 else
              shift_left(resize(unsigned(xram_mb), 24), 20) - 1;
@@ -523,9 +600,18 @@ begin
     vram_ra <= mem_raddr(16 downto 0) when rd_kind = RD_PORT else br_addr;
     br_addr <= br_blk & br_i;
 
+    -- the window: lines from the frame's top edge, width from the edges as
+    -- written (each layer and the sprites latch it at line_start)
+    c_left    <= to_unsigned(32, 6) when s_wide(0) > 32 else s_wide(0)(5 downto 0);
+    c_right   <= to_unsigned(32, 6) when s_wide(1) > 32 else s_wide(1)(5 downto 0);
+    win_w     <= to_unsigned(320, 9) + c_left + c_right;
+    win_first <= to_unsigned(WIN_TOP, 9) - f_top;
+    win_last  <= to_unsigned(WIN_TOP + 199, 9) + f_bot;
+    win_y     <= unsigned(raster_y) - win_first;
+    in_win    <= '1' when unsigned(raster_y) >= win_first and unsigned(raster_y) <= win_last else '0';
+    in_wwin   <= '1' when line_in = '1' and (vic_win = '1' or (hx + l_left >= wx0 and hx < wx0 + 320 + l_right)) else '0';
+
     -- the two layers
-    win_y  <= unsigned(raster_y) - WIN_TOP;
-    in_win <= '1' when unsigned(raster_y) >= WIN_TOP and unsigned(raster_y) < WIN_TOP + 200 else '0';
 
     gen_layers : for n in 0 to 1 generate
         lay : entity work.vicx_layer
@@ -533,7 +619,7 @@ begin
             port map (
                 clk => clk, reset => reset,
                 line_start => line_start, enable => ctrl(n),
-                win_y => win_y, in_win => in_win, setup => l_set(n),
+                win_y => win_y, in_win => in_win, width => win_w, setup => l_set(n),
                 f_req => u_req(n), f_addr => u_addr(n), f_gnt => u_gnt(n),
                 f_valid => u_valid(n), f_data => u_data,
                 x => vx_x, q_idx => q_idx(n), q_ok => q_ok(n), q_late => q_late(n));
@@ -573,7 +659,7 @@ begin
     end process;
 
     -- the sprite engine and what it hears of the register space
-    x_done   <= pix_ce and vic_win;
+    x_done   <= pix_ce and in_wwin;
     sp_tw_a  <= sweep_ptr when sweeping = '1' else mem_waddr(11 downto 0);
     sp_tw_d  <= x"00" when sweeping = '1' else mem_wdata;
     sp_tw_we <= '1' when (regs_we = '1' or sweeping = '1') and sp_tw_a(11 downto 10) = "01" else '0';
@@ -585,6 +671,7 @@ begin
                 tw_we => sp_tw_we, tw_addr => sp_tw_a(9 downto 0), tw_data => sp_tw_d,
                 frame_start => frame_start, line_start => line_start,
                 raster_y => unsigned(raster_y), line_on => ctrl(2),
+                win_first => win_first, win_last => win_last, width => win_w,
                 f_req => u_req(2), f_addr => u_addr(2), f_gnt => u_gnt(2),
                 f_valid => u_valid(2), f_data => u_data,
                 x => vx_x, x_done => x_done, q_front => sp_front, q_behind => sp_behind,
@@ -708,6 +795,13 @@ begin
             if ra = x"840" then                          -- layer order
                 s_order <= d;
             end if;
+            case to_integer(ra) is                       -- wide window edges
+                when 16#842# => s_wide(0) <= unsigned(d);
+                when 16#843# => s_wide(1) <= unsigned(d);
+                when 16#844# => s_wide(2) <= unsigned(d);
+                when 16#845# => s_wide(3) <= unsigned(d);
+                when others  => null;
+            end case;
             if ra(11 downto 7) = "10001" then           -- DMA descriptors
                 q := to_integer(ra(6 downto 5));
                 case to_integer(ra(4 downto 0)) is
@@ -1325,6 +1419,13 @@ begin
             if line_start = '1' then
                 line_ctrl <= ctrl;
                 line_pos  <= order_pos(s_order);
+                l_left    <= c_left;
+                l_right   <= c_right;
+                line_in   <= in_win;
+            end if;
+            if frame_start = '1' then
+                if s_wide(2) > 35 then f_top <= to_unsigned(35, 6); else f_top <= s_wide(2)(5 downto 0); end if;
+                if s_wide(3) > 37 then f_bot <= to_unsigned(37, 6); else f_bot <= s_wide(3)(5 downto 0); end if;
             end if;
 
             -- the sprite engine's results into the register space, in clocks
@@ -1480,6 +1581,9 @@ begin
                 line_ctrl <= (others => '0');
                 l_set     <= (others => (others => '0'));
                 s_order   <= (others => '0');
+                s_wide    <= (others => (others => '0'));
+                f_top     <= (others => '0');
+                f_bot     <= (others => '0');
                 line_pos  <= order_pos(x"00");
                 dm_st     <= DM_IDLE;
                 dm_busy   <= '0';
@@ -1540,10 +1644,20 @@ begin
                 lay_rgb := pal_rgb(pal_lo, li);
             end if;
 
+            -- where the 320x200 area starts in the line (learned from the
+            -- VIC-II), and the pixel count
+            if pix_ce = '1' then
+                vic_win_d <= vic_win;
+                if vic_win = '1' and vic_win_d = '0' then
+                    wx0 <= hx;
+                end if;
+                hx <= hx + 1;
+            end if;
+
             -- the layer pixel for the VIC-II pixel now coming in
             late_r <= '0';
             if pix_ce = '1' then
-                if vic_win = '1' then
+                if in_wwin = '1' then
                     sh_ok  := b_ok;
                     late_r <= b_late;
                     vx_x   <= vx_x + 1;
@@ -1573,8 +1687,10 @@ begin
             else
                 vc := vic_rgb;
             end if;
-            if sh_ok = '1' and vic_border = '0' and
-               (sh_vf = '0' or (lc(4) = '1' and vic_bg = '1')) then
+            -- over the 320x200 area the border stays on top; in the widened
+            -- part border pixels are background (transparent with bit 4)
+            if sh_ok = '1' and not (vic_win = '1' and vic_border = '1') and
+               (sh_vf = '0' or (lc(4) = '1' and (vic_bg = '1' or (vic_win = '0' and vic_border = '1')))) then
                 rgb_q <= sh_rgb;
             else
                 rgb_q <= vc;
@@ -1582,6 +1698,7 @@ begin
 
             if line_start = '1' then
                 vx_x <= (others => '0');
+                hx   <= (others => '0');
             end if;
         end if;
     end process;

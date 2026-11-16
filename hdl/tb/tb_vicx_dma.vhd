@@ -91,6 +91,9 @@ architecture sim of tb_vicx_dma is
     signal stock     : rgb_array;
     signal rgb_out   : std_logic_vector(23 downto 0);
     signal cpu_halt  : std_logic;
+    signal bus_addr  : std_logic_vector(15 downto 0) := (others => '0');
+    signal win_hit   : std_logic;
+    signal win_addr  : std_logic_vector(24 downto 0);
 
     signal vx_req, vx_we, vx_ack, vx_rvalid, vx_miss : std_logic := '0';
     signal vx_addr   : std_logic_vector(24 downto 0);
@@ -142,7 +145,8 @@ begin
             vic_idx => x"0", vic_rgb => x"000000", rgb_out => rgb_out,
             vx_req => vx_req, vx_we => vx_we, vx_addr => vx_addr, vx_din => vx_din,
             vx_be => vx_be, vx_ack => vx_ack, vx_rdata => vx_rdata,
-            vx_rvalid => vx_rvalid, vx_miss => vx_miss, cpu_halt => cpu_halt);
+            vx_rvalid => vx_rvalid, vx_miss => vx_miss, cpu_halt => cpu_halt,
+            bus_addr => bus_addr, win_hit => win_hit, win_addr => win_addr);
 
     -- the SDRAM controller's VIC-X port (see tb_vicx_step2), over the three
     -- spaces at their SDRAM addresses
@@ -590,6 +594,32 @@ begin
         desc(0, 0, 2 + 1 * 4, 16#050000#, 16#20040#, 960);
         run(0, "palette fade copy with the layer on", check_regs => true);
         wr(16#D048#, 0);
+
+        -- XRAM windows: W0 page $123 at $A000, W1 page $7FF at $2000, then
+        -- W1 also at $A000 (W0 wins), then W0 off
+        wr(16#D054#, 16#23#); wr(16#D055#, 16#01#); wr(16#D056#, 16#84#);
+        wr(16#D057#, 16#FF#); wr(16#D058#, 16#07#); wr(16#D059#, 16#80#);
+        win_check : for k in 0 to 5 loop
+            case k is
+                when 0 => bus_addr <= x"A123";
+                when 1 => bus_addr <= x"2FFF";
+                when 2 => bus_addr <= x"C000";
+                when 3 => wr(16#D059#, 16#84#); bus_addr <= x"BFFF";
+                when 4 => wr(16#D056#, 16#04#); bus_addr <= x"B000";
+                when others => bus_addr <= x"E000";
+            end case;
+            wait for 1 ns;
+            -- 2 MB of XRAM: addresses wrap at $200000
+            if (k = 0 and (win_hit /= '1' or unsigned(win_addr) /= 16#1000000# + (16#123# * 8192 + 16#0123#) mod 16#200000#)) or
+               (k = 1 and (win_hit /= '1' or unsigned(win_addr) /= 16#1000000# + (16#7FF# * 8192 + 16#0FFF#) mod 16#200000#)) or
+               (k = 2 and win_hit /= '0') or
+               (k = 3 and (win_hit /= '1' or unsigned(win_addr) /= 16#1000000# + (16#123# * 8192 + 16#1FFF#) mod 16#200000#)) or
+               (k = 4 and (win_hit /= '1' or unsigned(win_addr) /= 16#1000000# + (16#7FF# * 8192 + 16#1000#) mod 16#200000#)) or
+               (k = 5 and win_hit /= '0') then
+                fail("XRAM window case " & integer'image(k) & ": hit " & std_logic'image(win_hit) &
+                     " at $" & hex(win_addr(23 downto 0)));
+            end if;
+        end loop;
 
         if bad_addr > 0 then
             fail(integer'image(bad_addr) & " accesses outside the three spaces");

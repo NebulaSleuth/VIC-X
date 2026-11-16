@@ -6,10 +6,15 @@ checked in GHDL against the same behaviour as the VICE fork.
 
 | File | What |
 |------|------|
-| `vicx.vhd` | the block; its header describes the bus, video and reset interface |
+| `vicx.vhd` | the block; its header describes the bus, video, memory and reset interface |
+| `vicx_layer.vhd` | one tile or bitmap layer for one line at a time (two in the block) |
+| `vicx_sprites.vhd` | the sprite engine: selection, row fetch, line buffers, collisions |
 | `tb/tb_vicx_step1.vhd` | step 1 testbench (follows conformance tests t01-t08, then a random stress of both ports) |
 | `tb/tb_vicx_step2.vhd` | step 2 testbench: PAL lines of video, every pixel of each frame compared with the spec (t10-t14 cases, raster splits, port traffic) |
-| `tb/tb_vicx_dma.vhd` | DMA engine testbench: each transfer also run on a reference that follows VICE's `dma_run`, memories compared |
+| `tb/tb_vicx_step3.vhd` | step 3: both layers in every mode, the order register, border pixels, splits |
+| `tb/tb_vicx_step4.vhd` | step 4: sprites over two layers, the order with behind sprites, limits, collision list and IRQ after each frame |
+| `tb/tb_vicx_wide.vhd` | the wide window: edges per line and per frame, border pixels as background, sprites and layers from the widened corner |
+| `tb/tb_vicx_dma.vhd` | DMA engine testbench: each transfer also run on a reference that follows VICE's `dma_run`, memories compared; also the XRAM window decode |
 | `run_sim.sh` | analyse, elaborate and run every testbench in `tb/`; steps 1 and 2 also with external VRAM |
 | `sdram-vram-plan.md` | VRAM in the MiSTer's SDRAM: design, bandwidth, status |
 
@@ -37,20 +42,44 @@ stale-fetch discard makes it fail, and so does a memory that takes up to
 
 1. Done: unlock, ID and capability registers, the two ports and VRAM, the
    register space, palette, VIC-II colour remapping, frame counter, IRQ.
-   Synthesises for the MiSTer's Cyclone V with Quartus 17.0.2. Runs on the
-   MiSTer in the C64X core, first with VRAM in block RAM, now in SDRAM.
-2. Done: layer 0 as a 4- or 8-bit bitmap (CAP_FEAT bit 1). The core gives
-   the block two more VIC-II outputs per pixel: drawn from `$D021`, and in
-   the 320x200 window. Each line is fetched from its own start, when the
-   setup is latched (as the spec says), into a line buffer the display
-   reads behind the fetch; on the MiSTer the fetch has about 16 C64 cycles
-   before the window's left edge, about 48 SDRAM slots for at most 41
-   blocks.
-3. Tile layers, scrolling, mixing order.
-4. Sprite engine.
-5. DMA engine done (EXT_VRAM only, CAP_FEAT bit 3): every space through
-   the SDRAM port, C64 RAM transfers hold the CPU through RDY. XRAM windows
-   not yet.
+2. Done: bitmap layers (CAP_FEAT bit 1). The core gives the block three
+   more VIC-II flags per pixel: drawn from `$D021`, in the 320x200 window,
+   border.
+3. Done: tile layers, layer 1 and the layer order (CAP_FEAT bit 0). Each
+   layer fetches its line from the line's own start, when its setup is
+   latched (as the spec says), into a decoded line buffer the display reads
+   behind the fetch; the window's left edge comes about 16 C64 cycles later.
+4. Done: the sprite engine (CAP_FEAT bit 2, 128 entries, 32 a line). The
+   next line is prepared during the current one.
+5. Done for the MiSTer (CAP_FEAT bits 3 and 4): the DMA engine reaches C64
+   RAM, VRAM and XRAM through the SDRAM port, and holds the CPU through RDY
+   while it touches C64 RAM; the XRAM windows make the core send a CPU (or
+   REU) access to XRAM. Both need `EXT_VRAM`.
+
+Wide window: done. The block counts pixels from the line's start and
+learns where the 320x200 area begins from the VIC-II, so the edges can move
+out by up to 32 pixels each side, 35 lines up and 37 down (VICE's PAL
+visible frame).
+
+On the MiSTer (2026-11-15/16, CAP_FEAT $1F, 83% of the logic, 431 of 553
+block RAMs, timing met): t01-t28 as far as they run on hardware pass (t04
+only differs in CAP_XRAM, which is 16 with the REU on), and all six demos
+run: sixteen, gallery, parallax, bullets, bigworld and wide
+(`tests/hw/run_demo.py`).
+
+Known limits on the MiSTer, all from SDRAM bandwidth (one 8-byte block per
+free slot, 4 slots a C64 cycle, 3 while the REU's DMA runs):
+
+- While REU DMA runs, two 8x8 8-bit tile layers, or the heaviest sprite
+  line (640 8-bit pixels) over two layers, can miss pixels (drawn
+  transparent, `lay_late`). Without REU DMA they fit.
+- Collisions are checked one pair a clock as each line shows. A heap of
+  sprites with hundreds of pairs at a pixel falls behind, so the list can
+  hold other pairs than VICE's; the count (127) and the full flag agree.
+- Without XRAM (REU off) the windows take no accesses, where VICE reads
+  `$FF` there.
+- Turbo: VIC-X's slots are the turbo CPU slots; with turbo on, VIC-X gets
+  only what turbo leaves.
 
 The MiSTer core it goes into is the `vicx` branch of `D:\Repos\C64X_MiSTer`
 (the MiSTer C64 core with drive 9 removed to make room for the VRAM).
