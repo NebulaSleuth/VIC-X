@@ -3,10 +3,11 @@
 -- Steps 1 and 2 of the FPGA block: the unlock, the ID and capability
 -- registers, the two data ports with their auto-increment, VRAM, the
 -- register space behind the ports, the palette, VIC-II colour remapping
--- (CTRL bit 3), the frame counter and the IRQ (step 1); layer 0 as a 4- or
--- 8-bit bitmap behind the VIC-II (step 2, when CAP_FEAT bit 1 is set).
--- Tiles, layer 1, the layer order, sprites, DMA and the XRAM windows come in
--- later steps; their registers already hold and read back their values.
+-- (CTRL bit 3), the frame counter and the IRQ (step 1); bitmap layers
+-- (step 2, CAP_FEAT bit 1); tile layers, layer 1 and the layer order
+-- (step 3, CAP_FEAT bit 0); the DMA engine (step 5, CAP_FEAT bit 3).  The
+-- sprite engine and the XRAM windows come later; their registers already
+-- hold and read back their values.
 --
 -- Behaviour follows the VICE fork (src/vicx/vicx.c) register for register.
 -- Plain VHDL-93 with inferred block RAM and no vendor IP, so the same file
@@ -32,13 +33,14 @@
 --   border) and vic_win (the pixel is in the 320x200 display window, lines
 --   51-250, the area the border opens on with 40 columns and 25 rows).
 --
--- Layer 0 (bitmap)
---   CTRL and the layer setup are latched at line_start.  The line's bytes
---   are fetched from then on, in 8-byte blocks, into a line buffer that the
---   display reads as it goes; the fetch starts about 16 C64 cycles before
---   the window's left edge and runs faster than the display uses it.  A
---   pixel whose block has not arrived is drawn transparent and pulses
---   lay_late.
+-- Layers (vicx_layer.vhd)
+--   CTRL, the layer setups and the layer order are latched at line_start.
+--   Each layer fetches its line from then on, in 8-byte blocks, into a line
+--   buffer that the display reads as it goes; the fetch starts about 16 C64
+--   cycles before the window's left edge and runs faster than the display
+--   uses it.  A pixel whose block has not arrived is drawn transparent and
+--   pulses lay_late.  vic_border marks the VIC-II's border pixels, which
+--   stay in front over the 320x200 area whatever the order says.
 --
 -- External VRAM (EXT_VRAM = true)
 --   VRAM is not block RAM inside the block but a memory reached through the
@@ -122,6 +124,7 @@ entity vicx is
         raster_y     : in  std_logic_vector(8 downto 0) := (others => '0');
         vic_bg       : in  std_logic := '0';               -- pixel drawn from $D021
         vic_win      : in  std_logic := '0';               -- pixel in the 320x200 window
+        vic_border   : in  std_logic := '0';               -- pixel is the VIC-II's border
         rgb_out      : out std_logic_vector(23 downto 0);
         lay_late     : out std_logic;                      -- layer data not fetched in time
 
@@ -285,29 +288,41 @@ architecture rtl of vicx is
     signal line_ctrl  : std_logic_vector(4 downto 0) := (others => '0');
     signal rgb_q      : std_logic_vector(23 downto 0) := (others => '0');
 
-    -- layer 0 setup as last written ($20800 +0, +2-+4, +12-+13, +14)
-    signal s_mode     : std_logic_vector(7 downto 0) := (others => '0');
-    signal s_base     : unsigned(16 downto 0) := (others => '0');
-    signal s_stride   : unsigned(10 downto 0) := (others => '0');
-    signal s_bank     : std_logic_vector(3 downto 0) := (others => '0');
+    -- layer setups as last written ($20800 and $20820, bytes 0-14), and
+    -- the layer order ($20840)
+    type lset_t is array (0 to 1) of std_logic_vector(119 downto 0);
+    signal l_set      : lset_t := (others => (others => '0'));
+    signal s_order    : std_logic_vector(7 downto 0) := (others => '0');
+    constant HAS_TILES : boolean := CAP_FEAT(0) = '1';
 
-    -- layer 0 for this line: what is drawn, and the fetch
-    signal line_on    : std_logic := '0';
-    signal line_m8    : std_logic := '0';          -- 8-bit (else 4-bit)
-    signal line_dw    : std_logic := '0';          -- double-width pixels
-    signal line_bank  : std_logic_vector(3 downto 0) := (others => '0');
-    signal line_off   : unsigned(2 downto 0) := (others => '0');   -- row start in its block
-    signal lf_blk0    : unsigned(13 downto 0) := (others => '0');  -- first block
-    signal lf_n       : natural range 0 to 41 := 0;               -- blocks to fetch
-    signal bdone      : natural range 0 to 41 := 0;               -- blocks in the buffer
-    signal bdone_d    : natural range 0 to 41 := 0;
-    signal bdone_dd   : natural range 0 to 41 := 0;
-    signal lf_gen     : std_logic := '0';          -- toggles every line
-    signal f_line     : std_logic := '0';          -- the read in flight is a line fetch
-    signal f_gen      : std_logic := '0';
+    -- this line: who is in front of whom
+    signal ord_l0_l1  : std_logic := '1';          -- layer 0 in front of layer 1
+    signal ord_vic_l0 : std_logic := '1';          -- VIC-II in front of layer 0
+    signal ord_vic_l1 : std_logic := '1';
 
-    -- block RAM VRAM: the fetch reads bytes on clocks the CPU does not
-    signal br_k       : natural range 0 to 41 := 0;
+    -- the layers and their fetches
+    type uaddr_t is array (0 to 1) of unsigned(13 downto 0);
+    type uidx_t  is array (0 to 1) of std_logic_vector(7 downto 0);
+    signal u_req      : std_logic_vector(1 downto 0);
+    signal u_addr     : uaddr_t;
+    signal u_gnt      : std_logic_vector(1 downto 0) := "00";
+    signal u_valid    : std_logic_vector(1 downto 0) := "00";
+    signal u_data     : std_logic_vector(63 downto 0) := (others => '0');
+    signal u_pref     : std_logic := '0';          -- whose turn when both ask
+    signal f_line     : std_logic := '0';          -- the read in flight is a layer's
+    signal f_lu       : natural range 0 to 1 := 0;
+    signal q_idx      : uidx_t;
+    signal q_ok       : std_logic_vector(1 downto 0);
+    signal q_late     : std_logic_vector(1 downto 0);
+    signal win_y      : unsigned(8 downto 0);
+    signal in_win     : std_logic;
+
+    -- block RAM VRAM: a layer's block read a byte at a time, on clocks the
+    -- CPU leaves the read port free
+    signal br_busy    : std_logic := '0';
+    signal br_u       : natural range 0 to 1 := 0;
+    signal br_blk     : unsigned(13 downto 0) := (others => '0');
+    signal br_n       : natural range 0 to 8 := 0;
     signal br_i       : unsigned(2 downto 0) := (others => '0');
     signal br_iss     : std_logic := '0';
     signal br_ib      : unsigned(2 downto 0) := (others => '0');
@@ -315,34 +330,23 @@ architecture rtl of vicx is
     signal br_addr    : unsigned(16 downto 0);
     signal vram_ra    : unsigned(16 downto 0);
 
-    -- line buffer: 64 blocks of 8 bytes
-    type lb_t is array (0 to 63) of std_logic_vector(63 downto 0);
-    signal lbuf       : lb_t := (others => (others => '0'));
-    signal lb_we      : std_logic := '0';
-    signal lb_wa      : unsigned(5 downto 0) := (others => '0');
-    signal lb_wd      : std_logic_vector(63 downto 0) := (others => '0');
-    signal lb_ra      : unsigned(5 downto 0);
-    signal lb_q       : std_logic_vector(63 downto 0) := (others => '0');
-
     -- palette entries 16-255 for the display (copies of the register space)
     type pal_ram_t is array (0 to 255) of std_logic_vector(7 downto 0);
     signal pal_r, pal_g, pal_b : pal_ram_t := (others => (others => '0'));
     signal pal_ra     : unsigned(7 downto 0);
     signal pal_q      : std_logic_vector(23 downto 0) := (others => '0');
 
-    -- display pipeline: A reads the line buffer, B the palette
+    -- display: the frontmost opaque layer for each pixel, then its colour
     signal vx_x       : unsigned(8 downto 0) := (others => '0');   -- window pixel
-    signal a_pos      : unsigned(9 downto 0);
-    signal a_sel      : unsigned(2 downto 0) := (others => '0');
-    signal a_nib      : std_logic := '0';
-    signal a_ok       : std_logic := '0';
-    signal a_late     : std_logic := '0';
-    signal b_byte     : std_logic_vector(7 downto 0);
-    signal b_idxc     : std_logic_vector(7 downto 0);
+    signal w_idx      : std_logic_vector(7 downto 0);
+    signal w_ok       : std_logic;
+    signal w_vf       : std_logic;                 -- the VIC-II is in front of it
     signal b_idx      : std_logic_vector(7 downto 0) := (others => '0');
     signal b_ok       : std_logic := '0';
+    signal b_vf       : std_logic := '0';
     signal b_late     : std_logic := '0';
     signal cur_ok     : std_logic := '0';
+    signal cur_vf     : std_logic := '0';
     signal cur_rgb    : std_logic_vector(23 downto 0) := (others => '0');
     signal late_r     : std_logic := '0';
 
@@ -391,30 +395,6 @@ architecture rtl of vicx is
     function pal_rgb(p : byte_array; i : natural) return std_logic_vector is
     begin
         return p(i * 4) & p(i * 4 + 1) & p(i * 4 + 2);
-    end function;
-
-    -- window pixel x in layer pixels (double width halves it)
-    function lay_x(x : unsigned(8 downto 0); dw : std_logic) return unsigned is
-        variable r : unsigned(8 downto 0);
-    begin
-        r := x;
-        if dw = '1' then
-            r := '0' & x(8 downto 1);
-        end if;
-        return r;
-    end function;
-
-    -- the byte of the line buffer that holds window pixel x: the row's
-    -- offset in its first block, plus x (8-bit) or x / 2 (4-bit)
-    function lay_pos(x : unsigned(8 downto 0); dw, m8 : std_logic;
-                     off : unsigned(2 downto 0)) return unsigned is
-        variable lx : unsigned(8 downto 0);
-    begin
-        lx := lay_x(x, dw);
-        if m8 = '0' then
-            lx := '0' & lx(8 downto 1);
-        end if;
-        return resize(lx, 10) + resize(off, 10);
     end function;
 
     function byte_of(d : std_logic_vector(63 downto 0); n : unsigned(2 downto 0))
@@ -473,18 +453,30 @@ begin
     -- the block RAM's read port: a CPU port read in its clock, else the
     -- line fetch
     vram_ra <= mem_raddr(16 downto 0) when rd_kind = RD_PORT else br_addr;
-    br_addr <= (lf_blk0 + to_unsigned(br_k, 14)) & br_i;
+    br_addr <= br_blk & br_i;
 
-    -- line buffer: blocks in, one 8-byte word out per clock
-    lb_mem : process (clk)
-    begin
-        if rising_edge(clk) then
-            if lb_we = '1' then
-                lbuf(to_integer(lb_wa)) <= lb_wd;
-            end if;
-            lb_q <= lbuf(to_integer(lb_ra));
-        end if;
-    end process;
+    -- the two layers
+    win_y  <= unsigned(raster_y) - WIN_TOP;
+    in_win <= '1' when unsigned(raster_y) >= WIN_TOP and unsigned(raster_y) < WIN_TOP + 200 else '0';
+
+    gen_layers : for n in 0 to 1 generate
+        lay : entity work.vicx_layer
+            generic map (HAS_TILES => HAS_TILES, HAS_BMP => HAS_BMP)
+            port map (
+                clk => clk, reset => reset,
+                line_start => line_start, enable => ctrl(n),
+                win_y => win_y, in_win => in_win, setup => l_set(n),
+                f_req => u_req(n), f_addr => u_addr(n), f_gnt => u_gnt(n),
+                f_valid => u_valid(n), f_data => u_data,
+                x => vx_x, q_idx => q_idx(n), q_ok => q_ok(n), q_late => q_late(n));
+    end generate;
+
+    -- the frontmost opaque layer (the VIC-II's place in the order is
+    -- settled per pixel in the video process)
+    w_idx <= q_idx(0) when q_ok(0) = '1' and (q_ok(1) = '0' or ord_l0_l1 = '1') else
+             q_idx(1) when q_ok(1) = '1' else x"00";
+    w_ok  <= q_ok(0) or q_ok(1);
+    w_vf  <= ord_vic_l0 when q_ok(0) = '1' and (q_ok(1) = '0' or ord_l0_l1 = '1') else ord_vic_l1;
 
     -- palette entries 16-255 for the display: follow every write to them
     -- in the register space, and the clear after reset
@@ -513,16 +505,7 @@ begin
         end if;
     end process;
 
-    -- display pipeline, combinational parts
-    a_pos  <= lay_pos(vx_x, line_dw, line_m8, line_off);
-    lb_ra  <= a_pos(8 downto 3);
-    b_byte <= byte_of(lb_q, a_sel);
-    b_idxc <= b_byte when line_m8 = '1' else
-              x"00" when (a_nib = '0' and b_byte(7 downto 4) = "0000") or
-                         (a_nib = '1' and b_byte(3 downto 0) = "0000") else
-              line_bank & b_byte(7 downto 4) when a_nib = '0' else
-              line_bank & b_byte(3 downto 0);
-    pal_ra <= unsigned(b_idxc);
+    pal_ra <= unsigned(w_idx);
 
     regs_mem : process (clk)
         variable wa : natural range 0 to 4095;
@@ -591,17 +574,16 @@ begin
         procedure regs_snoop(ra : unsigned(11 downto 0); d : std_logic_vector(7 downto 0)) is
             variable q : natural range 0 to 3;
         begin
-            if ra(11 downto 5) = "1000000" then         -- layer 0 setup
-                case to_integer(ra(4 downto 0)) is
-                    when 0  => s_mode <= d;
-                    when 2  => s_base(7 downto 0)  <= unsigned(d);
-                    when 3  => s_base(15 downto 8) <= unsigned(d);
-                    when 4  => s_base(16) <= d(0);
-                    when 12 => s_stride(7 downto 0) <= unsigned(d);
-                    when 13 => s_stride(10 downto 8) <= unsigned(d(2 downto 0));
-                    when 14 => s_bank <= d(3 downto 0);
-                    when others => null;
-                end case;
+            if ra(11 downto 6) = "100000" then          -- layer setups
+                q := to_integer(ra(5 downto 5));
+                for b in 0 to 14 loop
+                    if to_integer(ra(4 downto 0)) = b then
+                        l_set(q)(8 * b + 7 downto 8 * b) <= d;
+                    end if;
+                end loop;
+            end if;
+            if ra = x"840" then                          -- layer order
+                s_order <= d;
             end if;
             if ra(11 downto 7) = "10001" then           -- DMA descriptors
                 q := to_integer(ra(6 downto 5));
@@ -665,8 +647,8 @@ begin
             regs_we <= '0';
             rd_kind <= RD_NONE;
             miss_r  <= '0';
-            lb_we   <= '0';
-            bdv     := bdone;
+            u_gnt   <= "00";
+            u_valid <= "00";
             dmok    := false;
 
             bd := blk_data;
@@ -703,14 +685,9 @@ begin
                             dmok := true;
                             eng <= E_IDLE;
                         elsif vx_rvalid = '1' and f_line = '1' then
-                            -- a line fetch: into the line buffer, unless the
-                            -- line it was for has ended
-                            if f_gen = lf_gen and bdv < 41 then
-                                lb_we <= '1';
-                                lb_wa <= to_unsigned(bdv, 6);
-                                lb_wd <= vx_rdata;
-                                bdv   := bdv + 1;
-                            end if;
+                            -- a layer's block
+                            u_valid(f_lu) <= '1';
+                            u_data <= vx_rdata;
                             eng <= E_IDLE;
                         elsif vx_rvalid = '1' then
                             if stale_v = '0' then
@@ -730,28 +707,40 @@ begin
                 end case;
             end if;
 
-            -- block RAM VRAM: line fetch bytes, read on clocks the CPU leaves
-            -- the read port free (see vram_ra)
+            -- block RAM VRAM: a layer's block, a byte at a time, on clocks the
+            -- CPU leaves the read port free (see vram_ra)
             if not EXT_VRAM then
                 if br_iss = '1' then
                     bb := br_buf;
                     bb(8 * to_integer(br_ib) + 7 downto 8 * to_integer(br_ib)) := vram_q;
                     br_buf <= bb;
-                    if br_ib = "111" and bdv < 41 then
-                        lb_we <= '1';
-                        lb_wa <= to_unsigned(bdv, 6);
-                        lb_wd <= bb;
-                        bdv   := bdv + 1;
+                    if br_ib = "111" then
+                        u_valid(br_u) <= '1';
+                        u_data  <= bb;
+                        br_busy <= '0';
                     end if;
                 end if;
                 br_iss <= '0';
-                if br_k < lf_n and rd_kind /= RD_PORT then
-                    br_iss <= '1';
-                    br_ib  <= br_i;
-                    br_i   <= br_i + 1;
-                    if br_i = "111" then
-                        br_k <= br_k + 1;
+                if br_busy = '1' then
+                    if br_n < 8 and rd_kind /= RD_PORT then
+                        br_iss <= '1';
+                        br_ib  <= br_i;
+                        br_i   <= br_i + 1;
+                        br_n   <= br_n + 1;
                     end if;
+                elsif line_start = '0' and u_req /= "00" and u_gnt = "00" then
+                    if u_req(0) = '1' and (u_req(1) = '0' or u_pref = '0') then
+                        dn := 0;
+                    else
+                        dn := 1;
+                    end if;
+                    u_pref     <= not u_pref;
+                    u_gnt(dn)  <= '1';
+                    br_u       <= dn;
+                    br_blk     <= u_addr(dn);
+                    br_busy    <= '1';
+                    br_n       <= 0;
+                    br_i       <= (others => '0');
                 end if;
             end if;
 
@@ -1190,32 +1179,26 @@ begin
             pal_lo   <= pal_v;
             pal_pend <= pend_v;
 
-            -- start of a raster line: latch CTRL and the layer setup, and
-            -- start fetching this line's bitmap row
+            -- start of a raster line: latch CTRL and the layer order (the
+            -- layers take their own setups)
             if line_start = '1' then
                 line_ctrl <= ctrl;
-                yi  := to_integer(unsigned(raster_y)) - WIN_TOP;
-                row := resize(s_base, 19) + resize(to_unsigned(yi mod 256, 8) * s_stride, 19);
-                if s_mode(0) = '1' then nb := 320; else nb := 160; end if;
-                if s_mode(3) = '1' then nb := nb / 2; end if;
-                if HAS_BMP and ctrl(0) = '1' and s_mode(1) = '1' and
-                   yi >= 0 and yi < 200 then
-                    line_on <= '1';
-                    lf_n    <= (to_integer(row(2 downto 0)) + nb + 7) / 8;
+                -- higher priority in front; ties: sprites, VIC-II, layer 0, layer 1
+                if unsigned(s_order(1 downto 0)) >= unsigned(s_order(3 downto 2)) then
+                    ord_l0_l1 <= '1';
                 else
-                    line_on <= '0';
-                    lf_n    <= 0;
+                    ord_l0_l1 <= '0';
                 end if;
-                line_m8   <= s_mode(0);
-                line_dw   <= s_mode(3);
-                line_bank <= s_bank;
-                line_off  <= row(2 downto 0);
-                lf_blk0   <= row(16 downto 3);
-                lf_gen    <= not lf_gen;
-                bdv       := 0;
-                br_k      <= 0;
-                br_i      <= (others => '0');
-                br_iss    <= '0';
+                if unsigned(s_order(5 downto 4)) >= unsigned(s_order(1 downto 0)) then
+                    ord_vic_l0 <= '1';
+                else
+                    ord_vic_l0 <= '0';
+                end if;
+                if unsigned(s_order(5 downto 4)) >= unsigned(s_order(3 downto 2)) then
+                    ord_vic_l1 <= '1';
+                else
+                    ord_vic_l1 <= '0';
+                end if;
             end if;
 
             -- external VRAM engine: start the next request.  Queued writes
@@ -1249,17 +1232,24 @@ begin
                             exit;
                         end if;
                     end loop;
-                    -- then the line fetch, block by block in order
-                    if not issued and line_start = '0' and bdv < lf_n then
-                        f_line <= '1';
-                        f_dma  <= '0';
-                        f_gen  <= lf_gen;
-                        addr_r <= std_logic_vector(to_unsigned(VRAM_BASE, 25) +
-                                  resize((lf_blk0 + to_unsigned(bdv, 14)) & "000", 25));
-                        we_r   <= '0';
-                        req_r  <= '1';
-                        eng    <= E_RREQ;
-                        issued := true;
+                    -- then the layers, taking turns
+                    if not issued and line_start = '0' and u_req /= "00" and u_gnt = "00" then
+                        if u_req(0) = '1' and (u_req(1) = '0' or u_pref = '0') then
+                            dn := 0;
+                        else
+                            dn := 1;
+                        end if;
+                        u_pref    <= not u_pref;
+                        u_gnt(dn) <= '1';
+                        f_lu      <= dn;
+                        f_line    <= '1';
+                        f_dma     <= '0';
+                        addr_r    <= std_logic_vector(to_unsigned(VRAM_BASE, 25) +
+                                     resize(u_addr(dn) & "000", 25));
+                        we_r      <= '0';
+                        req_r     <= '1';
+                        eng       <= E_RREQ;
+                        issued    := true;
                     end if;
                     -- then the DMA engine
                     if not issued and dmr_req = '1' then
@@ -1286,9 +1276,6 @@ begin
             f_stale   <= stale_v;
             wq_count  <= wqc;
             wq_wr     <= wqw;
-            bdone     <= bdv;
-            bdone_d   <= bdv;
-            bdone_dd  <= bdone_d;
 
             -- read pipeline: stage 2 (memory data valid), stage 3 (output)
             rd_kind2   <= rd_kind;
@@ -1332,12 +1319,8 @@ begin
                 regs_we   <= '0';
                 rd_kind   <= RD_NONE;
                 line_ctrl <= (others => '0');
-                s_mode    <= (others => '0');
-                s_base    <= (others => '0');
-                s_stride  <= (others => '0');
-                s_bank    <= (others => '0');
-                line_on   <= '0';
-                lf_n      <= 0;
+                l_set     <= (others => (others => '0'));
+                s_order   <= (others => '0');
                 dm_st     <= DM_IDLE;
                 dm_busy   <= '0';
                 dm_c64    <= '0';
@@ -1366,38 +1349,27 @@ begin
 
     ---------------------------------------------------------------------------
     -- video.  With CTRL bit 3 set, VIC-II colour n shows palette entry n.
-    -- Layer 0 shows where the VIC-II pixel is background and CTRL bit 4 is
-    -- set, if its own pixel is not colour 0.  Palette writes are immediate.
+    -- In the window, the frontmost opaque layer shows unless the VIC-II is
+    -- in front of it with an opaque pixel (background pixels are transparent
+    -- with CTRL bit 4); the VIC-II's border stays on top of everything.
+    -- Palette writes are immediate.
 
     video : process (clk)
         variable i       : natural range 0 to 15;
         variable li      : natural range 0 to 255;
         variable lay_rgb : std_logic_vector(23 downto 0);
         variable sh_ok   : std_logic;
+        variable sh_vf   : std_logic;
         variable sh_rgb  : std_logic_vector(23 downto 0);
         variable vc      : std_logic_vector(23 downto 0);
         variable lc      : std_logic_vector(4 downto 0);
     begin
         if rising_edge(clk) then
-            -- A: line buffer word for pixel vx_x (lb_q comes with it)
-            a_sel  <= a_pos(2 downto 0);
-            a_nib  <= lay_x(vx_x, line_dw)(0);
-            a_ok   <= '0';
-            a_late <= '0';
-            if line_on = '1' then
-                if to_integer(a_pos(9 downto 3)) < bdone_dd then
-                    a_ok <= '1';
-                else
-                    a_late <= '1';
-                end if;
-            end if;
-            -- B: palette entry (pal_q comes with it)
-            b_idx <= b_idxc;
-            b_ok  <= '0';
-            if a_ok = '1' and b_idxc /= x"00" then
-                b_ok <= '1';
-            end if;
-            b_late <= a_late;
+            -- B: the frontmost layer pixel for vx_x (pal_q comes with it)
+            b_idx  <= w_idx;
+            b_ok   <= w_ok;
+            b_vf   <= w_vf;
+            b_late <= q_late(0) or q_late(1);
 
             li := to_integer(unsigned(b_idx));
             if li >= 16 then
@@ -1413,17 +1385,19 @@ begin
             if pix_ce = '1' then
                 if vic_win = '1' then
                     sh_ok  := b_ok;
-                    sh_rgb := lay_rgb;
                     late_r <= b_late;
                     vx_x   <= vx_x + 1;
                 else
                     sh_ok  := '0';
-                    sh_rgb := lay_rgb;
                 end if;
+                sh_vf   := b_vf;
+                sh_rgb  := lay_rgb;
                 cur_ok  <= sh_ok;
+                cur_vf  <= sh_vf;
                 cur_rgb <= sh_rgb;
             else
                 sh_ok  := cur_ok;
+                sh_vf  := cur_vf;
                 sh_rgb := cur_rgb;
             end if;
 
@@ -1439,7 +1413,8 @@ begin
             else
                 vc := vic_rgb;
             end if;
-            if sh_ok = '1' and lc(4) = '1' and vic_bg = '1' then
+            if sh_ok = '1' and vic_border = '0' and
+               (sh_vf = '0' or (lc(4) = '1' and vic_bg = '1')) then
                 rgb_q <= sh_rgb;
             else
                 rgb_q <= vc;

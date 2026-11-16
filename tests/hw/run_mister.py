@@ -8,8 +8,10 @@ PRG into it.  After a few seconds the MiSTer takes a screenshot, which is
 copied back and judged by its border colour.  A test's `; PIXEL:` lines
 (from its first `; RUN:` block) that fall inside the 320x200 window are
 checked on the screenshot too: the MiSTer's screenshot is 382x270 with the
-window at (32,34), one line higher than VICE's 384x272 one.  Border pixels
-are not checked, since the harness colours the border.
+window at (32,34) or (33,34) (the capture moves by a pixel from one
+screenshot to the next), one line up from VICE's 384x272 one; each
+screenshot is judged at whichever of the two fits better.  Not checked:
+border pixels and the top text line, where the harness writes its result.
 
 Needs SSH key access to the MiSTer as root.  Uses Windows' own OpenSSH
 client, which takes the key; Git Bash's ssh is refused by this MiSTer.
@@ -91,7 +93,7 @@ def pixel_checks(name):
             x, y = int(x), int(y)
             neg = want.startswith("!")
             want = want.lstrip("!")
-            if 32 <= x < 352 and 35 <= y < 235:
+            if 32 <= x < 352 and 43 <= y < 235:
                 checks.append((x, y - 1, tuple(int(want[i:i + 2], 16) for i in (0, 2, 4)), neg))
     return checks
 
@@ -100,13 +102,20 @@ def check_pixels(name, path, tol=40):
     import importlib
     rt = importlib.import_module("run-tests")
     _, _, pixel = rt.png_read(path)
-    bad = []
-    for x, y, want, neg in pixel_checks(name):
-        got = tuple(pixel(x, y)[:3])
-        close = all(abs(a - b) <= tol for a, b in zip(got, want))
-        if close == neg:
-            bad.append(f"({x},{y}) {'%02X%02X%02X' % got} {'!' if neg else ''}{'%02X%02X%02X' % want}")
-    return bad
+    border = tuple(pixel(4, 4)[:3])     # the harness's result colour
+    best = None
+    for dx in (1, 0):
+        bad = []
+        for x, y, want, neg in pixel_checks(name):
+            got = tuple(pixel(x + dx, y)[:3])
+            if got == border and want == (0, 0, 0) and not neg:
+                continue    # the test's black border, which the harness colours
+            close = all(abs(a - b) <= tol for a, b in zip(got, want))
+            if close == neg:
+                bad.append(f"({x + dx},{y}) {'%02X%02X%02X' % got} {'!' if neg else ''}{'%02X%02X%02X' % want}")
+        if best is None or len(bad) < len(best):
+            best = bad
+    return best
 
 
 def verdict(rgb):

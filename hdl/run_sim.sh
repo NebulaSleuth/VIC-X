@@ -11,7 +11,7 @@ mkdir -p build
 cd build
 GHDL="ghdl"
 FLAGS="--std=08 --workdir=. -frelaxed"
-$GHDL -a $FLAGS ../vicx.vhd
+$GHDL -a $FLAGS ../vicx_layer.vhd ../vicx.vhd
 status=0
 run() {
     echo "== $*"

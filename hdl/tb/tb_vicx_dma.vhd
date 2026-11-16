@@ -100,6 +100,8 @@ architecture sim of tb_vicx_dma is
     signal ready     : boolean := false;
     signal done      : boolean := false;
     signal bad_addr  : natural := 0;
+    signal line_st   : std_logic := '0';
+    signal raster_y  : std_logic_vector(8 downto 0) := (others => '0');
 
     function hex(v : std_logic_vector) return string is
         constant digits : string(1 to 16) := "0123456789ABCDEF";
@@ -136,7 +138,7 @@ begin
             cpu_wr => cpu_wr, cpu_rd => cpu_rd, claim => claim,
             cpu_dout => cpu_dout, irq => irq,
             xram_mb => x"02", stock_rgb => stock,
-            frame_start => '0', line_start => '0',
+            frame_start => '0', line_start => line_st, raster_y => raster_y,
             vic_idx => x"0", vic_rgb => x"000000", rgb_out => rgb_out,
             vx_req => vx_req, vx_we => vx_we, vx_addr => vx_addr, vx_din => vx_din,
             vx_be => vx_be, vx_ack => vx_ack, vx_rdata => vx_rdata,
@@ -206,6 +208,20 @@ begin
             end if;
             cnt := cnt + 1;
         end if;
+    end process;
+
+    -- raster lines (63 cycles of 32 clocks), so a layer fetches while DMA runs
+    lines : process
+        variable ln : natural := 0;
+    begin
+        for i in 1 to 2015 loop
+            wait until rising_edge(clk);
+        end loop;
+        line_st  <= '1';
+        raster_y <= std_logic_vector(to_unsigned(ln, 9));
+        wait until rising_edge(clk);
+        line_st <= '0';
+        ln := (ln + 1) mod 312;
     end process;
 
     stim : process
@@ -547,6 +563,22 @@ begin
         end loop;
         desc(0, 1, 1 * 4, 0, 0, 0);         -- width 0: nothing
         run(0, "start while busy, then width 0");
+
+        -- a big background copy while layer 0 (an 8-bit bitmap) fetches
+        -- every line, as the gallery demo does
+        port_set(1, 16#20800#);
+        for k in 0 to 14 loop
+            if k = 0 then wr(16#D053#, 3); elsif k = 12 then wr(16#D053#, 64);
+            elsif k = 13 then wr(16#D053#, 1); else wr(16#D053#, 0); end if;
+            ref.put(3, 16#800# + k, 0);
+        end loop;
+        ref.put(3, 16#800#, 3); ref.put(3, 16#80C#, 64); ref.put(3, 16#80D#, 1);
+        wr(16#D048#, 16#11#);
+        desc(0, 0, 2 + 1 * 4, 16#040000#, 16#10000#, 64000);
+        run(0, "64,000-byte copy XRAM to VRAM with the layer on");
+        desc(0, 0, 2 + 1 * 4, 16#050000#, 16#20040#, 960);
+        run(0, "palette fade copy with the layer on", check_regs => true);
+        wr(16#D048#, 0);
 
         if bad_addr > 0 then
             fail(integer'image(bad_addr) & " accesses outside the three spaces");
