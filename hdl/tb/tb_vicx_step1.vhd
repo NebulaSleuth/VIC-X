@@ -6,10 +6,17 @@
 library ieee;
 use ieee.std_logic_1164.all;
 use ieee.numeric_std.all;
+use ieee.math_real.all;
 use std.env.all;
 use work.vicx_pkg.all;
 
 entity tb_vicx_step1 is
+    generic (
+        EXT    : boolean := false;  -- VRAM through the vx_* port, with a memory model
+        GAP    : natural := 8;      -- clocks per CPU access (128 = four C64 cycles)
+        MAXLAT : natural := 16;     -- the model's longest wait for a slot, in clocks
+        SEED   : positive := 1
+    );
 end entity;
 
 architecture sim of tb_vicx_step1 is
@@ -34,6 +41,15 @@ architecture sim of tb_vicx_step1 is
 
     signal done      : boolean := false;
 
+    -- external VRAM port and its model
+    signal vx_req, vx_we, vx_ack, vx_rvalid, vx_miss : std_logic := '0';
+    signal vx_addr   : std_logic_vector(16 downto 0);
+    signal vx_din    : std_logic_vector(15 downto 0);
+    signal vx_be     : std_logic_vector(1 downto 0);
+    signal vx_rdata  : std_logic_vector(63 downto 0) := (others => '0');
+    signal misses    : natural := 0;
+    signal requests  : natural := 0;
+
     function hex(v : std_logic_vector) return string is
         constant digits : string(1 to 16) := "0123456789ABCDEF";
         variable r : string(1 to v'length / 4);
@@ -57,7 +73,8 @@ begin
     end generate;
 
     dut : entity work.vicx
-        generic map (VRAM_BITS => 17, CAP_SPR => 0, CAP_SPRLINE => 0, CAP_FEAT => x"00")
+        generic map (VRAM_BITS => 17, CAP_SPR => 0, CAP_SPRLINE => 0, CAP_FEAT => x"00",
+                     EXT_VRAM => EXT)
         port map (
             clk => clk, reset => reset,
             vic_cs => vic_cs, cpu_addr => cpu_addr, cpu_din => cpu_din,
@@ -65,7 +82,56 @@ begin
             cpu_dout => cpu_dout, irq => irq,
             xram_mb => xram_mb, stock_rgb => stock,
             frame_start => frame_st, line_start => line_st,
-            vic_idx => vic_idx, vic_rgb => vic_rgb, rgb_out => rgb_out);
+            vic_idx => vic_idx, vic_rgb => vic_rgb, rgb_out => rgb_out,
+            vx_req => vx_req, vx_we => vx_we, vx_addr => vx_addr, vx_din => vx_din,
+            vx_be => vx_be, vx_ack => vx_ack, vx_rdata => vx_rdata,
+            vx_rvalid => vx_rvalid, vx_miss => vx_miss);
+
+    -- external memory: answers like the SDRAM controller's VIC-X port, after
+    -- a random wait for a free slot; a read's data come 4 clocks after ack
+    mem_model : process
+        type mem_t is array (0 to 131071) of std_logic_vector(7 downto 0);
+        variable mem : mem_t := (others => x"00");
+        variable s1, s2 : positive := SEED;
+        variable r : real;
+        variable a : natural;
+        variable blk : std_logic_vector(63 downto 0);
+    begin
+        wait until rising_edge(clk) and vx_req = '1';
+        uniform(s1, s2, r);
+        for i in 1 to 1 + integer(trunc(r * real(MAXLAT))) loop
+            wait until rising_edge(clk);
+        end loop;
+        a := to_integer(unsigned(vx_addr));
+        if vx_we = '1' then
+            if vx_be(0) = '1' then mem((a / 2) * 2) := vx_din(7 downto 0); end if;
+            if vx_be(1) = '1' then mem((a / 2) * 2 + 1) := vx_din(15 downto 8); end if;
+        else
+            for n in 0 to 7 loop
+                blk(8 * n + 7 downto 8 * n) := mem((a / 8) * 8 + n);
+            end loop;
+        end if;
+        requests <= requests + 1;
+        vx_ack <= '1';
+        wait until rising_edge(clk);
+        vx_ack <= '0';
+        if vx_we = '0' then
+            for i in 1 to 3 loop
+                wait until rising_edge(clk);
+            end loop;
+            vx_rdata <= blk;
+            vx_rvalid <= '1';
+            wait until rising_edge(clk);
+            vx_rvalid <= '0';
+        end if;
+    end process;
+
+    count_miss : process (clk)
+    begin
+        if rising_edge(clk) and vx_miss = '1' then
+            misses <= misses + 1;
+        end if;
+    end process;
 
     stim : process
 
@@ -80,7 +146,8 @@ begin
 
         -- one CPU write; addr is the full C64 address, cs says whether it
         -- falls in $D000-$D3FF with I/O mapped in
-        procedure wr(addr : natural; val : natural; cs : std_logic := '1') is
+        -- g: clocks this access takes (0 = GAP)
+        procedure wr(addr : natural; val : natural; cs : std_logic := '1'; g : natural := 0) is
         begin
             cpu_addr <= std_logic_vector(to_unsigned(addr mod 1024, 10));
             cpu_din  <= std_logic_vector(to_unsigned(val, 8));
@@ -89,11 +156,11 @@ begin
             wait until rising_edge(clk);
             cpu_wr   <= '0';
             vic_cs   <= '0';
-            idle(7);
+            if g = 0 then idle(GAP - 1); else idle(g - 1); end if;
         end procedure;
 
         procedure rd(addr : natural; val : out std_logic_vector(7 downto 0);
-                     owned : out std_logic) is
+                     owned : out std_logic; g : natural := 0) is
         begin
             cpu_addr <= std_logic_vector(to_unsigned(addr mod 1024, 10));
             vic_cs   <= '1';
@@ -105,7 +172,7 @@ begin
             vic_cs   <= '0';
             idle(3);
             val      := cpu_dout;
-            idle(4);
+            if g = 0 then idle(GAP - 4); else idle(g - 4); end if;
         end procedure;
 
         procedure fail(msg : string) is
@@ -182,6 +249,17 @@ begin
         constant BACK   : natural := 16#80#;
         variable v : std_logic_vector(7 downto 0);
         variable o : std_logic;
+
+        -- stress test state
+        type ref_t is array (16#0E00# to 16#1200#) of integer;
+        type int2 is array (0 to 1) of integer;
+        type steps_t is array (0 to 4) of natural;
+        constant STEPS : steps_t := (0, 1, 2, 4, 8);
+        variable ref : ref_t := (others => -1);
+        variable ra, rs : int2 := (others => 0);
+        variable s1, s2 : positive := SEED + 11;
+        variable r : real;
+        variable p, sc, d : natural;
 
     begin
         reset <= '1';
@@ -364,6 +442,67 @@ begin
         expect(16#D053#, 0, "t06 entry 63 cleared");
         port1(16#00010#, STEP1);
         expect(16#D053#, 16#A0#, "t06 VRAM kept");
+
+        -- both ports at random over a small area, so they keep landing in
+        -- each other's 8-byte blocks: every read must see every earlier write
+        for i in 1 to 2500 loop
+            uniform(s1, s2, r);
+            p := integer(trunc(r * 2.0));
+            uniform(s1, s2, r);
+            if r < 0.15 or i <= 2 or ra(p) < 16#0E10# or ra(p) > 16#11F0# then
+                -- new address (and step) for one port
+                uniform(s1, s2, r);
+                ra(p) := 16#1000# + integer(trunc(r * 96.0));
+                uniform(s1, s2, r);
+                sc := integer(trunc(r * 5.0));      -- step codes 0-4: 0, 1, 2, 4, 8
+                rs(p) := STEPS(sc);
+                uniform(s1, s2, r);
+                if r < 0.3 then
+                    sc := sc + 16;                  -- backwards
+                    rs(p) := -rs(p);
+                end if;
+                if p = 0 then port0(ra(p), sc * 8); else port1(ra(p), sc * 8); end if;
+            elsif r < 0.25 then
+                -- INC on the data port: read, then two writes on the next two
+                -- bus cycles (the 6510 writes the old value back first)
+                rd(16#D04F# + 4 * p, v, o, 32);
+                if ref(ra(p)) >= 0 and to_integer(unsigned(v)) /= ref(ra(p)) then
+                    fail("stress: INC port " & integer'image(p) & " read $" & hex(v)
+                         & " at " & integer'image(ra(p)) & ", want "
+                         & integer'image(ref(ra(p))));
+                end if;
+                d := to_integer(unsigned(v));
+                ra(p) := ra(p) + rs(p);
+                wr(16#D04F# + 4 * p, d, '1', 32);
+                ref(ra(p)) := d;
+                ra(p) := ra(p) + rs(p);
+                wr(16#D04F# + 4 * p, (d + 1) mod 256);
+                ref(ra(p)) := (d + 1) mod 256;
+                ra(p) := ra(p) + rs(p);
+            elsif r < 0.6 then
+                uniform(s1, s2, r);
+                d := integer(trunc(r * 256.0));
+                wr(16#D04F# + 4 * p, d);
+                ref(ra(p)) := d;
+                ra(p) := ra(p) + rs(p);
+            else
+                rd(16#D04F# + 4 * p, v, o);
+                if ref(ra(p)) >= 0 and to_integer(unsigned(v)) /= ref(ra(p)) then
+                    fail("stress: port " & integer'image(p) & " read $" & hex(v)
+                         & " at " & integer'image(ra(p)) & ", want "
+                         & integer'image(ref(ra(p))));
+                end if;
+                ra(p) := ra(p) + rs(p);
+            end if;
+        end loop;
+
+        if misses /= 0 then
+            fail(integer'image(misses) & " port reads found no data ready");
+        end if;
+        if EXT then
+            report "external VRAM: " & integer'image(requests) & " requests, GAP "
+                   & integer'image(GAP) & ", MAXLAT " & integer'image(MAXLAT);
+        end if;
 
         if errors = 0 then
             report "PASS: VIC-X step 1" severity note;

@@ -26,10 +26,25 @@
 --   colour index and the core's RGB for it, and returns the RGB to show one
 --   clock later.
 --
+-- External VRAM (EXT_VRAM = true)
+--   VRAM is not block RAM inside the block but a memory reached through the
+--   vx_* port (on the MiSTer, the SDRAM controller's VIC-X port).  Hold vx_req
+--   with vx_we / vx_addr / vx_din / vx_be until vx_ack; a read returns the
+--   8-byte-aligned block holding vx_addr in vx_rdata (byte n in bits
+--   8n+7..8n) when vx_rvalid is high.  Requests go one at a time.
+--   The CPU takes port data three clocks after its read, far sooner than
+--   external memory answers, so each port keeps a copy of the 8-byte block
+--   it points at, fetched ahead whenever its address leaves that block.
+--   Port writes go into a 16-entry queue and update any copy holding the
+--   same byte; a fetch in flight when a write to its block arrives is
+--   discarded and made again.  A read that finds no copy ready gets $FF and
+--   pulses vx_miss: that needs reads closer together than any 6510 code
+--   makes them, or a memory too slow for this block.
+--
 -- Reset
 --   reset locks VIC-X, clears CTRL, IRQ and the ports, and restores the
 --   stock palette.  The register space is then cleared by a sweep of about
---   2,500 clocks; VRAM keeps its contents.
+--   2,500 clocks; VRAM keeps its contents (queued writes still go out).
 
 library ieee;
 use ieee.std_logic_1164.all;
@@ -49,7 +64,8 @@ entity vicx is
         VRAM_BITS    : natural := 17;           -- 2^17 = 128 KB
         CAP_SPR      : natural := 0;            -- what this build provides
         CAP_SPRLINE  : natural := 0;
-        CAP_FEAT     : std_logic_vector(7 downto 0) := x"00"
+        CAP_FEAT     : std_logic_vector(7 downto 0) := x"00";
+        EXT_VRAM     : boolean := false         -- VRAM through the vx_* port
     );
     port (
         clk          : in  std_logic;
@@ -74,7 +90,18 @@ entity vicx is
         line_start   : in  std_logic;
         vic_idx      : in  std_logic_vector(3 downto 0);
         vic_rgb      : in  std_logic_vector(23 downto 0);
-        rgb_out      : out std_logic_vector(23 downto 0)
+        rgb_out      : out std_logic_vector(23 downto 0);
+
+        -- external VRAM (EXT_VRAM only)
+        vx_req       : out std_logic;
+        vx_we        : out std_logic;
+        vx_addr      : out std_logic_vector(16 downto 0);
+        vx_din       : out std_logic_vector(15 downto 0);
+        vx_be        : out std_logic_vector(1 downto 0);
+        vx_ack       : in  std_logic := '0';
+        vx_rdata     : in  std_logic_vector(63 downto 0) := (others => '0');
+        vx_rvalid    : in  std_logic := '0';
+        vx_miss      : out std_logic
     );
 end entity;
 
@@ -114,8 +141,7 @@ architecture rtl of vicx is
     signal pal_pend   : std_logic := '1';
 
     -- memories
-    signal vram       : byte_array(0 to VRAM_SIZE - 1);
-    signal regs       : byte_array(0 to REGSPACE_SZ - 1);
+    signal regs      : byte_array(0 to REGSPACE_SZ - 1);
 
     signal vram_q     : std_logic_vector(7 downto 0);
     signal regs_q     : std_logic_vector(7 downto 0);
@@ -142,6 +168,39 @@ architecture rtl of vicx is
     signal rd_pal     : std_logic_vector(7 downto 0) := (others => '0');
     signal rd_pal2    : std_logic_vector(7 downto 0) := (others => '0');
     signal dout       : std_logic_vector(7 downto 0) := (others => '1');
+
+    -- external VRAM: each port's copy of its 8-byte block, the write queue
+    -- and the request engine
+    type blk_data_t is array (0 to 1) of std_logic_vector(63 downto 0);
+    type blk_addr_t is array (0 to 1) of unsigned(13 downto 0);
+    type wq_addr_t  is array (0 to 15) of unsigned(16 downto 0);
+    type eng_t      is (E_IDLE, E_WREQ, E_RREQ, E_RWAIT);
+    signal blk_data   : blk_data_t := (others => (others => '0'));
+    signal blk_addr   : blk_addr_t := (others => (others => '0'));
+    signal blk_valid  : std_logic_vector(1 downto 0) := "00";
+    signal wq_addr    : wq_addr_t := (others => (others => '0'));
+    signal wq_data    : byte_array(0 to 15) := (others => (others => '0'));
+    signal wq_rd      : unsigned(3 downto 0) := (others => '0');
+    signal wq_wr      : unsigned(3 downto 0) := (others => '0');
+    signal wq_count   : natural range 0 to 16 := 0;
+    signal eng        : eng_t := E_IDLE;
+    signal f_blk      : unsigned(13 downto 0) := (others => '0');
+    signal f_stale    : std_logic := '0';
+    signal req_r      : std_logic := '0';
+    signal we_r       : std_logic := '0';
+    signal addr_r     : std_logic_vector(16 downto 0) := (others => '0');
+    signal din_r      : std_logic_vector(15 downto 0) := (others => '0');
+    signal be_r       : std_logic_vector(1 downto 0) := "00";
+    signal miss_r     : std_logic := '0';
+    signal rd_ext     : std_logic_vector(7 downto 0) := (others => '0');
+    signal rd_ext2    : std_logic_vector(7 downto 0) := (others => '0');
+
+    -- the port's block is in its copy
+    function has_blk(bv : std_logic_vector(1 downto 0); ba : blk_addr_t;
+                     q : natural; a : unsigned(17 downto 0)) return boolean is
+    begin
+        return bv(q) = '1' and ba(q) = a(16 downto 3);
+    end function;
 
     -- video
     signal line_ctrl  : std_logic_vector(4 downto 0) := (others => '0');
@@ -205,18 +264,33 @@ begin
     cpu_dout <= dout;
     rgb_out  <= rgb_q;
 
+    vx_req   <= req_r;
+    vx_we    <= we_r;
+    vx_addr  <= addr_r;
+    vx_din   <= din_r;
+    vx_be    <= be_r;
+    vx_miss  <= miss_r;
+
     ---------------------------------------------------------------------------
     -- memories: one read port and one write port each
 
-    vram_mem : process (clk)
+    gen_bram : if not EXT_VRAM generate
+        signal vram : byte_array(0 to VRAM_SIZE - 1);
     begin
-        if rising_edge(clk) then
-            if vram_we = '1' then
-                vram(to_integer(mem_waddr(VRAM_BITS - 1 downto 0))) <= mem_wdata;
+        vram_mem : process (clk)
+        begin
+            if rising_edge(clk) then
+                if vram_we = '1' then
+                    vram(to_integer(mem_waddr(VRAM_BITS - 1 downto 0))) <= mem_wdata;
+                end if;
+                vram_q <= vram(to_integer(mem_raddr(VRAM_BITS - 1 downto 0)));
             end if;
-            vram_q <= vram(to_integer(mem_raddr(VRAM_BITS - 1 downto 0)));
-        end if;
-    end process;
+        end process;
+    end generate;
+
+    gen_ext : if EXT_VRAM generate
+        vram_q <= x"FF";
+    end generate;
 
     regs_mem : process (clk)
         variable wa : natural range 0 to 4095;
@@ -254,11 +328,61 @@ begin
         variable pal_v   : byte_array(0 to PAL_LO_SZ - 1);
         variable pend_v  : std_logic;
         variable v       : std_logic_vector(7 downto 0);
+        variable bd      : blk_data_t;
+        variable bv      : std_logic_vector(1 downto 0);
+        variable ba      : blk_addr_t;
+        variable stale_v : std_logic;
+        variable wqc     : natural range 0 to 16;
+        variable wqw     : unsigned(3 downto 0);
+        variable bi      : natural range 0 to 7;
     begin
         if rising_edge(clk) then
             vram_we <= '0';
             regs_we <= '0';
             rd_kind <= RD_NONE;
+            miss_r  <= '0';
+
+            bd := blk_data;
+            bv := blk_valid;
+            ba := blk_addr;
+            stale_v := f_stale;
+            wqc := wq_count;
+            wqw := wq_wr;
+
+            -- external VRAM engine: finish the request in hand first, so the
+            -- CPU access below sees a block that arrives in this clock
+            if EXT_VRAM then
+                case eng is
+                    when E_WREQ =>
+                        if vx_ack = '1' then
+                            req_r <= '0';
+                            wq_rd <= wq_rd + 1;
+                            wqc := wqc - 1;
+                            eng <= E_IDLE;
+                        end if;
+                    when E_RREQ =>
+                        if vx_ack = '1' then
+                            req_r <= '0';
+                            eng <= E_RWAIT;
+                        end if;
+                    when E_RWAIT =>
+                        if vx_rvalid = '1' then
+                            if stale_v = '0' then
+                                for q in 0 to 1 loop
+                                    if region_of(port_addr(q)) = REG_VRAM and
+                                       port_addr(q)(16 downto 3) = f_blk then
+                                        bd(q) := vx_rdata;
+                                        bv(q) := '1';
+                                        ba(q) := f_blk;
+                                    end if;
+                                end loop;
+                            end if;
+                            eng <= E_IDLE;
+                        end if;
+                    when E_IDLE =>
+                        null;
+                end case;
+            end if;
 
             -- register-space sweep
             if sweeping = '1' then
@@ -319,7 +443,27 @@ begin
                                     rgn := region_of(a);
                                     case rgn is
                                         when REG_VRAM =>
-                                            vram_we <= '1';
+                                            if EXT_VRAM then
+                                                -- queue it, and update the copies
+                                                if wqc < 16 then
+                                                    wq_addr(to_integer(wqw)) <= a(16 downto 0);
+                                                    wq_data(to_integer(wqw)) <= cpu_din;
+                                                    wqw := wqw + 1;
+                                                    wqc := wqc + 1;
+                                                end if;
+                                                bi := to_integer(a(2 downto 0));
+                                                for q in 0 to 1 loop
+                                                    if has_blk(bv, ba, q, a) then
+                                                        bd(q)(8 * bi + 7 downto 8 * bi) := cpu_din;
+                                                    end if;
+                                                end loop;
+                                                if (eng = E_RREQ or eng = E_RWAIT) and
+                                                   f_blk = a(16 downto 3) then
+                                                    stale_v := '1';
+                                                end if;
+                                            else
+                                                vram_we <= '1';
+                                            end if;
                                         when REG_PALLO =>
                                             if pend_v = '1' then
                                                 for i in 0 to PAL_LO_SZ - 1 loop
@@ -395,6 +539,15 @@ begin
                         rd_kind   <= RD_PORT;
                         rd_region <= rgn;
                         rd_pal    <= pal_v(to_integer(a(5 downto 0)));
+                        if EXT_VRAM and rgn = REG_VRAM then
+                            bi := to_integer(a(2 downto 0));
+                            if has_blk(bv, ba, p, a) then
+                                rd_ext <= bd(p)(8 * bi + 7 downto 8 * bi);
+                            else
+                                rd_ext <= x"FF";
+                                miss_r <= '1';
+                            end if;
+                        end if;
                         mem_raddr <= a;
                         port_addr(p) <= stepped(a, port_step(p));
                     when 16#54# to 16#59# => v := win(off - 16#54#);
@@ -407,16 +560,61 @@ begin
             pal_lo   <= pal_v;
             pal_pend <= pend_v;
 
+            -- external VRAM engine: start the next request.  Queued writes
+            -- go first, so a fetch always sees every write queued before it.
+            if EXT_VRAM and eng = E_IDLE then
+                if wqc > 0 and wq_count = 0 then
+                    null;               -- a write queued this clock: next clock
+                elsif wq_count > 0 then
+                    addr_r <= std_logic_vector(wq_addr(to_integer(wq_rd)));
+                    din_r  <= wq_data(to_integer(wq_rd)) & wq_data(to_integer(wq_rd));
+                    if wq_addr(to_integer(wq_rd))(0) = '1' then
+                        be_r <= "10";
+                    else
+                        be_r <= "01";
+                    end if;
+                    we_r  <= '1';
+                    req_r <= '1';
+                    eng   <= E_WREQ;
+                else
+                    for q in 0 to 1 loop
+                        if region_of(port_addr(q)) = REG_VRAM and
+                           not has_blk(bv, ba, q, port_addr(q)) then
+                            f_blk   <= port_addr(q)(16 downto 3);
+                            stale_v := '0';
+                            addr_r  <= std_logic_vector(port_addr(q)(16 downto 3)) & "000";
+                            we_r    <= '0';
+                            req_r   <= '1';
+                            eng     <= E_RREQ;
+                            exit;
+                        end if;
+                    end loop;
+                end if;
+            end if;
+
+            blk_data  <= bd;
+            blk_valid <= bv;
+            blk_addr  <= ba;
+            f_stale   <= stale_v;
+            wq_count  <= wqc;
+            wq_wr     <= wqw;
+
             -- read pipeline: stage 2 (memory data valid), stage 3 (output)
             rd_kind2   <= rd_kind;
             rd_val2 <= rd_val;
             rd_region2 <= rd_region;
             rd_pal2    <= rd_pal;
+            rd_ext2    <= rd_ext;
             case rd_kind2 is
                 when RD_DIRECT => dout <= rd_val2;
                 when RD_PORT =>
                     case rd_region2 is
-                        when REG_VRAM  => dout <= vram_q;
+                        when REG_VRAM  =>
+                            if EXT_VRAM then
+                                dout <= rd_ext2;
+                            else
+                                dout <= vram_q;
+                            end if;
                         when REG_REGS  => dout <= regs_q;
                         when REG_PALLO => dout <= rd_pal2;
                         when REG_ZERO  => dout <= x"00";
@@ -442,6 +640,12 @@ begin
                 vram_we   <= '0';
                 regs_we   <= '0';
                 rd_kind   <= RD_NONE;
+                -- the copies go; a fetch in flight is thrown away when it
+                -- lands; queued writes still go out
+                blk_valid <= "00";
+                if eng = E_RREQ or eng = E_RWAIT then
+                    f_stale <= '1';
+                end if;
             end if;
         end if;
     end process;
