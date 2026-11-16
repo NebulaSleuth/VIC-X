@@ -28,8 +28,8 @@ writes are queued and update the copies. `run_sim.sh` runs the step 1
 testbench with external VRAM at C64 speed (an access every 128 clocks,
 read-modify-write cycles 32 apart) against a memory that answers after up
 to 16 and up to 40 clocks. Deliberately breaking the write snoop or the
-stale-fetch discard makes it fail, and so does a memory slower than about
-120 clocks (reads find no data ready: `vx_miss`).
+stale-fetch discard makes it fail, and so does a memory that takes up to
+200 clocks (reads find no data ready: `vx_miss`).
 
 ## Steps
 
