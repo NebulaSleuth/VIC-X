@@ -1,0 +1,569 @@
+-- Testbench for the VIC-X DMA engine (step 5, external VRAM only).  VRAM,
+-- C64 RAM and XRAM (2 MB) sit behind a model of the SDRAM controller's VIC-X
+-- port; every transfer is also run on a reference that follows the VICE
+-- fork's dma_run (src/vicx/vicx.c), and the memories are compared after it.
+-- Covers copy, fill and masked copy, straight and 2D, chains with the IRQ,
+-- the register space (palette entries 0-15 and above), XRAM wrapping,
+-- overlapping copies, reserved operations, starts while busy, the CPU halt,
+-- and a port's copy seeing a DMA write.
+-- Run with hdl/run_sim.sh; prints PASS or the failures and exits 1.
+
+library ieee;
+use ieee.std_logic_1164.all;
+use ieee.numeric_std.all;
+use std.env.all;
+use work.vicx_pkg.all;
+
+entity tb_vicx_dma is
+end entity;
+
+architecture sim of tb_vicx_dma is
+
+    constant C64_SZ  : natural := 65536;
+    constant VRAM_SZ : natural := 131072;
+    constant XRAM_SZ : natural := 2 * 1048576;
+    constant REGS_SZ : natural := 16#A00#;
+
+    type mem_pt is protected
+        procedure init(seed : natural);
+        impure function get(sp : natural; a : natural) return natural;
+        procedure put(sp : natural; a : natural; v : natural);
+    end protected;
+
+    type mem_pt is protected body
+        type c64_t  is array (0 to C64_SZ - 1) of natural range 0 to 255;
+        type vram_t is array (0 to VRAM_SZ - 1) of natural range 0 to 255;
+        type xram_t is array (0 to XRAM_SZ - 1) of natural range 0 to 255;
+        type regs_t is array (0 to REGS_SZ - 1) of natural range 0 to 255;
+        variable c64  : c64_t;
+        variable vram : vram_t;
+        variable xram : xram_t;
+        variable regs : regs_t := (others => 0);
+
+        procedure init(seed : natural) is
+        begin
+            for a in c64'range loop c64(a) := (a * 31 + a / 256 * 7 + seed) mod 256; end loop;
+            for a in vram'range loop vram(a) := (a * 57 + a / 512 * 13 + seed) mod 256; end loop;
+            for a in xram'range loop xram(a) := (a * 89 + a / 1024 * 3 + seed) mod 256; end loop;
+            for i in 0 to 15 loop                   -- the stock palette, as the block shows it
+                regs(i * 4)     := i * 16;
+                regs(i * 4 + 1) := i * 16 + 1;
+                regs(i * 4 + 2) := i * 16 + 2;
+                regs(i * 4 + 3) := 0;
+            end loop;
+        end procedure;
+
+        -- sp: 0 C64, 1 VRAM, 2 XRAM, 3 register space (offset from $20000)
+        impure function get(sp : natural; a : natural) return natural is
+        begin
+            case sp is
+                when 0 => return c64(a);
+                when 1 => return vram(a);
+                when 2 => return xram(a);
+                when others => return regs(a);
+            end case;
+        end function;
+
+        procedure put(sp : natural; a : natural; v : natural) is
+        begin
+            case sp is
+                when 0 => c64(a) := v;
+                when 1 => vram(a) := v;
+                when 2 => xram(a) := v;
+                when others => regs(a) := v;
+            end case;
+        end procedure;
+    end protected body;
+
+    shared variable model : mem_pt;     -- what the memory model holds
+    shared variable ref   : mem_pt;     -- what it should hold
+
+    signal clk       : std_logic := '0';
+    signal reset     : std_logic := '0';
+    signal vic_cs    : std_logic := '0';
+    signal cpu_addr  : std_logic_vector(9 downto 0) := (others => '0');
+    signal cpu_din   : std_logic_vector(7 downto 0) := (others => '0');
+    signal cpu_wr    : std_logic := '0';
+    signal cpu_rd    : std_logic := '0';
+    signal claim     : std_logic;
+    signal cpu_dout  : std_logic_vector(7 downto 0);
+    signal irq       : std_logic;
+    signal stock     : rgb_array;
+    signal rgb_out   : std_logic_vector(23 downto 0);
+    signal cpu_halt  : std_logic;
+
+    signal vx_req, vx_we, vx_ack, vx_rvalid, vx_miss : std_logic := '0';
+    signal vx_addr   : std_logic_vector(24 downto 0);
+    signal vx_din    : std_logic_vector(15 downto 0);
+    signal vx_be     : std_logic_vector(1 downto 0);
+    signal vx_rdata  : std_logic_vector(63 downto 0) := (others => '0');
+    signal ready     : boolean := false;
+    signal done      : boolean := false;
+    signal bad_addr  : natural := 0;
+
+    function hex(v : std_logic_vector) return string is
+        constant digits : string(1 to 16) := "0123456789ABCDEF";
+        variable r : string(1 to v'length / 4);
+        variable x : std_logic_vector(v'length - 1 downto 0) := v;
+    begin
+        for i in r'range loop
+            r(i) := digits(to_integer(unsigned(x(x'left - (i - 1) * 4 downto x'left - (i - 1) * 4 - 3))) + 1);
+        end loop;
+        return r;
+    end function;
+
+    function h(n : natural; digits : natural := 6) return string is
+    begin
+        return hex(std_logic_vector(to_unsigned(n, 4 * digits)));
+    end function;
+
+begin
+
+    clk <= not clk after 5 ns when not done;
+
+    stock_init : for i in 0 to 15 generate
+        stock(i) <= std_logic_vector(to_unsigned(i * 16, 8)) &
+                    std_logic_vector(to_unsigned(i * 16 + 1, 8)) &
+                    std_logic_vector(to_unsigned(i * 16 + 2, 8));
+    end generate;
+
+    dut : entity work.vicx
+        generic map (VRAM_BITS => 17, CAP_SPR => 0, CAP_SPRLINE => 0, CAP_FEAT => x"0A",
+                     EXT_VRAM => true)
+        port map (
+            clk => clk, reset => reset,
+            vic_cs => vic_cs, cpu_addr => cpu_addr, cpu_din => cpu_din,
+            cpu_wr => cpu_wr, cpu_rd => cpu_rd, claim => claim,
+            cpu_dout => cpu_dout, irq => irq,
+            xram_mb => x"02", stock_rgb => stock,
+            frame_start => '0', line_start => '0',
+            vic_idx => x"0", vic_rgb => x"000000", rgb_out => rgb_out,
+            vx_req => vx_req, vx_we => vx_we, vx_addr => vx_addr, vx_din => vx_din,
+            vx_be => vx_be, vx_ack => vx_ack, vx_rdata => vx_rdata,
+            vx_rvalid => vx_rvalid, vx_miss => vx_miss, cpu_halt => cpu_halt);
+
+    -- the SDRAM controller's VIC-X port (see tb_vicx_step2), over the three
+    -- spaces at their SDRAM addresses
+    mem_model : process (clk)
+        variable cnt   : natural := 0;
+        variable t     : integer := -1;
+        variable a, sp, o : natural;
+        variable slot  : natural;
+        variable blk   : std_logic_vector(63 downto 0);
+
+        procedure locate(ad : natural; s : out natural; off : out natural) is
+        begin
+            if ad < C64_SZ then
+                s := 0; off := ad;
+            elsif ad >= 16#100000# and ad < 16#100000# + VRAM_SZ then
+                s := 1; off := ad - 16#100000#;
+            elsif ad >= 16#1000000# and ad < 16#1000000# + XRAM_SZ then
+                s := 2; off := ad - 16#1000000#;
+            else
+                s := 9; off := 0;
+            end if;
+        end procedure;
+    begin
+        if rising_edge(clk) then
+            vx_ack    <= '0';
+            vx_rvalid <= '0';
+            if t >= 0 then
+                t := t + 1;
+                if t = 4 then
+                    vx_rdata  <= blk;
+                    vx_rvalid <= '1';
+                    t := -1;
+                end if;
+            end if;
+            slot := (cnt / 4) mod 8;
+            if t < 0 and cnt mod 4 = 0 and vx_req = '1' and
+               (slot = 1 or slot = 4 or slot = 5 or slot = 6) then
+                a := to_integer(unsigned(vx_addr));
+                vx_ack <= '1';
+                if vx_we = '1' then
+                    for ln in 0 to 1 loop
+                        if vx_be(ln) = '1' then
+                            locate((a / 2) * 2 + ln, sp, o);
+                            if sp = 9 then
+                                bad_addr <= bad_addr + 1;
+                            else
+                                model.put(sp, o, to_integer(unsigned(vx_din(8 * ln + 7 downto 8 * ln))));
+                            end if;
+                        end if;
+                    end loop;
+                else
+                    for n in 0 to 7 loop
+                        locate((a / 8) * 8 + n, sp, o);
+                        if sp = 9 then
+                            bad_addr <= bad_addr + 1;
+                            blk(8 * n + 7 downto 8 * n) := x"EE";
+                        else
+                            blk(8 * n + 7 downto 8 * n) := std_logic_vector(to_unsigned(model.get(sp, o), 8));
+                        end if;
+                    end loop;
+                    t := 0;
+                end if;
+            end if;
+            cnt := cnt + 1;
+        end if;
+    end process;
+
+    stim : process
+        variable errors : natural := 0;
+        variable v      : std_logic_vector(7 downto 0);
+        variable halted : boolean;
+        type desc_t is array (0 to 31) of natural;
+        variable d      : desc_t;
+
+        procedure idle(n : natural) is
+        begin
+            for i in 1 to n loop
+                wait until rising_edge(clk);
+            end loop;
+        end procedure;
+
+        procedure fail(msg : string) is
+        begin
+            report "FAIL: " & msg severity error;
+            errors := errors + 1;
+        end procedure;
+
+        procedure wr(addr : natural; val : natural; g : natural := 8) is
+        begin
+            cpu_addr <= std_logic_vector(to_unsigned(addr mod 1024, 10));
+            cpu_din  <= std_logic_vector(to_unsigned(val mod 256, 8));
+            vic_cs   <= '1';
+            cpu_wr   <= '1';
+            wait until rising_edge(clk);
+            cpu_wr   <= '0';
+            vic_cs   <= '0';
+            idle(g - 1);
+        end procedure;
+
+        procedure rd(addr : natural; val : out std_logic_vector(7 downto 0); g : natural := 8) is
+        begin
+            cpu_addr <= std_logic_vector(to_unsigned(addr mod 1024, 10));
+            vic_cs   <= '1';
+            cpu_rd   <= '1';
+            wait until rising_edge(clk);
+            cpu_rd   <= '0';
+            vic_cs   <= '0';
+            idle(3);
+            val      := cpu_dout;
+            idle(g - 4);
+        end procedure;
+
+        procedure port_set(p : natural; a : natural; step : natural := 1) is
+            constant r : natural := 16#D04C# + 4 * p;
+        begin
+            wr(r, a mod 256);
+            wr(r + 1, (a / 256) mod 256);
+            wr(r + 2, step * 8 + a / 65536);
+        end procedure;
+
+        -- the reference's view of a DMA space (VICE dma_read / dma_write)
+        impure function ref_rd(sp : natural; a : natural) return natural is
+            variable pa : natural;
+        begin
+            case sp is
+                when 0 => return ref.get(0, a mod C64_SZ);
+                when 1 =>
+                    pa := a mod 262144;
+                    if pa < VRAM_SZ then
+                        return ref.get(1, pa);
+                    elsif pa >= 16#20000# and pa < 16#20000# + REGS_SZ then
+                        return ref.get(3, pa - 16#20000#);
+                    end if;
+                    return 255;
+                when 2 => return ref.get(2, (a mod 16777216) mod XRAM_SZ);
+                when others => return 255;
+            end case;
+        end function;
+
+        procedure ref_wr(sp : natural; a : natural; val : natural) is
+            variable pa : natural;
+        begin
+            case sp is
+                when 0 => ref.put(0, a mod C64_SZ, val);
+                when 1 =>
+                    pa := a mod 262144;
+                    if pa < VRAM_SZ then
+                        ref.put(1, pa, val);
+                    elsif pa >= 16#20000# and pa < 16#20000# + REGS_SZ then
+                        ref.put(3, pa - 16#20000#, val);
+                    end if;
+                when 2 => ref.put(2, (a mod 16777216) mod XRAM_SZ, val);
+                when others => null;
+            end case;
+        end procedure;
+
+        -- a register-space write through port 1, kept in the reference
+        procedure reg_store(a : natural; val : natural) is
+        begin
+            port_set(1, 16#20000# + a);
+            wr(16#D053#, val);
+            ref.put(3, a, val mod 256);
+        end procedure;
+
+        -- descriptor n with these fields, written through the port
+        procedure desc(n : natural; op, spaces : natural; src, dst : natural;
+                       w : natural; hgt : natural := 0; ss : natural := 0; ds : natural := 0;
+                       fill : natural := 0; tr : natural := 0; nxt : natural := 255) is
+            variable b : desc_t := (others => 0);
+        begin
+            b(0) := op; b(1) := spaces;
+            for k in 0 to 3 loop
+                b(2 + k) := (src / (256 ** k)) mod 256;
+                b(6 + k) := (dst / (256 ** k)) mod 256;
+            end loop;
+            b(10) := w mod 256;   b(11) := w / 256;
+            b(12) := hgt mod 256; b(13) := hgt / 256;
+            b(14) := ss mod 256;  b(15) := ss / 256;
+            b(16) := ds mod 256;  b(17) := ds / 256;
+            b(18) := fill; b(19) := tr; b(20) := nxt;
+            port_set(1, 16#20880# + 32 * n);
+            for k in 0 to 31 loop
+                wr(16#D053#, b(k), 4);
+                ref.put(3, 16#880# + 32 * n + k, b(k));
+            end loop;
+        end procedure;
+
+        -- run descriptor n (and its chain) on the reference, as dma_start does
+        procedure ref_run(n0 : natural; irq_want : out boolean) is
+            variable n, op, ssp, dsp, src, dst, w, hh, sst, dst2, fill, tr, nxt : natural;
+            variable ran : std_logic_vector(3 downto 0) := "0000";
+            variable twod : boolean;
+            variable base : natural;
+            variable val  : natural;
+            variable s0, t0 : natural;
+        begin
+            irq_want := false;
+            n := n0;
+            while n < 4 and ran(n) = '0' loop
+                ran(n) := '1';
+                base := 16#880# + 32 * n;
+                op  := ref.get(3, base);
+                ssp := ref.get(3, base + 1) mod 4;
+                dsp := (ref.get(3, base + 1) / 4) mod 4;
+                twod := (ref.get(3, base + 1) / 16) mod 2 = 1;
+                if (ref.get(3, base + 1) / 32) mod 2 = 1 then
+                    irq_want := true;
+                end if;
+                src := ref.get(3, base + 2) + 256 * ref.get(3, base + 3) + 65536 * ref.get(3, base + 4);
+                dst := ref.get(3, base + 6) + 256 * ref.get(3, base + 7) + 65536 * ref.get(3, base + 8);
+                w   := ref.get(3, base + 10) + 256 * ref.get(3, base + 11);
+                if twod then
+                    hh := ref.get(3, base + 12) + 256 * ref.get(3, base + 13);
+                else
+                    hh := 1;
+                end if;
+                sst  := ref.get(3, base + 14) + 256 * ref.get(3, base + 15);
+                dst2 := ref.get(3, base + 16) + 256 * ref.get(3, base + 17);
+                fill := ref.get(3, base + 18);
+                tr   := ref.get(3, base + 19);
+                nxt  := ref.get(3, base + 20);
+                if not (op > 2 or dsp = 3 or (op /= 1 and ssp = 3)) then
+                    for r in 0 to hh - 1 loop
+                        if twod then
+                            s0 := src + r * sst; t0 := dst + r * dst2;
+                        else
+                            s0 := src; t0 := dst;
+                        end if;
+                        for i in 0 to w - 1 loop
+                            if op = 1 then
+                                ref_wr(dsp, t0 + i, fill);
+                            else
+                                val := ref_rd(ssp, s0 + i);
+                                if op = 0 or val /= tr then
+                                    ref_wr(dsp, t0 + i, val);
+                                end if;
+                            end if;
+                        end loop;
+                    end loop;
+                end if;
+                if nxt = 255 then
+                    n := 4;
+                else
+                    n := nxt;
+                end if;
+            end loop;
+        end procedure;
+
+        -- start the chain at n, wait for busy to clear, compare everything
+        procedure run(n : natural; what : string; c64 : boolean := false;
+                      check_regs : boolean := false) is
+            variable irq_want : boolean;
+            variable cycles   : natural := 0;
+            variable bad      : natural := 0;
+            variable g, w     : natural;
+            variable irq_was  : std_logic_vector(7 downto 0);
+        begin
+            wr(16#D04A#, 16#07#);                       -- clear IRQ_STAT
+            ref_run(n, irq_want);
+            wr(16#D05A#, n);
+            halted := false;
+            loop
+                if cpu_halt = '1' then
+                    halted := true;
+                end if;
+                wait until rising_edge(clk);
+                cycles := cycles + 1;
+                -- the CPU cannot read while held: poll only when free
+                if cpu_halt = '0' and cycles mod 64 = 0 then
+                    rd(16#D05A#, v);
+                    exit when v(7) = '0';
+                end if;
+                if cycles > 4000000 then
+                    fail(what & ": DMA never finished");
+                    exit;
+                end if;
+            end loop;
+            if c64 and not halted then
+                fail(what & ": CPU not held during a C64 RAM transfer");
+            elsif not c64 and halted then
+                fail(what & ": CPU held during a background transfer");
+            end if;
+            idle(100);                                  -- queued writes go out
+            rd(16#D04A#, irq_was);
+            if irq_want and irq_was(1) = '0' then
+                fail(what & ": no DMA IRQ");
+            elsif not irq_want and irq_was(1) = '1' then
+                fail(what & ": DMA IRQ not asked for");
+            end if;
+            for sp in 0 to 2 loop
+                case sp is
+                    when 0 => w := C64_SZ;
+                    when 1 => w := VRAM_SZ;
+                    when others => w := XRAM_SZ;
+                end case;
+                for a in 0 to w - 1 loop
+                    g := model.get(sp, a);
+                    if g /= ref.get(sp, a) then
+                        bad := bad + 1;
+                        if bad <= 6 then
+                            fail(what & ": space " & integer'image(sp) & " $" & h(a) &
+                                 " is $" & h(g, 2) & ", want $" & h(ref.get(sp, a), 2));
+                        end if;
+                    end if;
+                end loop;
+            end loop;
+            if check_regs then
+                port_set(1, 16#20000#);
+                for a in 0 to REGS_SZ - 1 loop
+                    rd(16#D053#, v);
+                    if to_integer(unsigned(v)) /= ref.get(3, a) then
+                        bad := bad + 1;
+                        if bad <= 6 then
+                            fail(what & ": register $" & h(16#20000# + a, 5) & " is $" & hex(v) &
+                                 ", want $" & h(ref.get(3, a), 2));
+                        end if;
+                    end if;
+                end loop;
+            end if;
+            report what & ": " & integer'image(cycles) & " clocks, " &
+                   integer'image(bad) & " wrong";
+        end procedure;
+
+    begin
+        model.init(7);
+        ref.init(7);
+        reset <= '1';
+        idle(4);
+        reset <= '0';
+        idle(2600);
+        wr(16#D06F#, 16#56#); wr(16#D06F#, 16#58#); wr(16#D06F#, 16#21#);
+
+        -- spaces: 0 C64, 1 VRAM, 2 XRAM; +1 = src + 4 * dst, +16 2D, +32 IRQ
+        desc(0, 1, 1 * 4, 0, 16#01000#, 1000, fill => 16#5A#);
+        run(0, "fill VRAM");
+
+        desc(0, 0, 2 + 1 * 4, 16#012345#, 16#00FF3#, 3001);
+        run(0, "copy XRAM to VRAM, unaligned");
+
+        desc(1, 0, 1 + 2 * 4 + 16, 16#00100#, 16#100003#, 37, 9, 320, 40);
+        run(1, "2D copy VRAM to XRAM");
+
+        desc(2, 2, 0 + 1 * 4, 16#C000#, 16#04001#, 500, tr => 16#00#);
+        for a in 16#C000# to 16#C000# + 499 loop       -- zeros to skip
+            if a mod 3 = 0 then
+                model.put(0, a, 0);
+                ref.put(0, a, 0);
+            end if;
+        end loop;
+        run(2, "masked copy C64 to VRAM", c64 => true);
+
+        desc(3, 0, 1 + 1 * 4, 16#08000#, 16#08003#, 100);
+        run(3, "overlapping VRAM copy");
+
+        desc(0, 1, 0 * 4, 0, 16#FFF0#, 40, fill => 16#C3#);
+        run(0, "fill C64 RAM, wrapping at 64 KB", c64 => true);
+
+        desc(0, 0, 2 + 2 * 4, 16#1FFFF0#, 16#000100#, 40);
+        desc(1, 0, 1 + 2 * 4, 16#00200#, 16#1FFFFA#, 20);
+        desc(0, 0, 2 + 2 * 4, 16#1FFFF0#, 16#000100#, 40, nxt => 1);
+        run(0, "XRAM wrap, chained");
+
+        -- C64 RAM into the palette: entries 0-15 and above
+        desc(0, 0, 0 + 1 * 4, 16#2000#, 16#20000#, 200);
+        run(0, "copy C64 RAM to the palette", c64 => true, check_regs => true);
+
+        -- and back out, from the register space
+        desc(1, 0, 1 + 0 * 4, 16#20010#, 16#3000#, 100);
+        run(1, "copy palette to C64 RAM", c64 => true);
+
+        -- a chain 0 -> 1 -> 2 -> 0 (ends: 0 already ran), IRQ on 1, reserved op on 2
+        desc(0, 1, 2 * 4, 0, 16#040000#, 64, fill => 16#11#, nxt => 1);
+        desc(1, 1, 2 * 4 + 32, 0, 16#040040#, 64, fill => 16#22#, nxt => 2);
+        desc(2, 3, 2 * 4, 0, 16#040080#, 64, fill => 16#33#, nxt => 0);
+        run(0, "chain with IRQ and a reserved operation");
+
+        -- a DMA write reaches a port's copy of its block
+        port_set(0, 16#05000#);
+        rd(16#D04F#, v);                    -- port 0 now holds $05001's block
+        idle(200);
+        desc(0, 1, 1 * 4, 0, 16#05001#, 2, fill => 16#9E#);
+        run(0, "fill under a port's copy");
+        rd(16#D04F#, v);
+        if v /= x"9E" then
+            fail("port 0 read $" & hex(v) & " after the DMA, want $9E");
+        end if;
+
+        -- a start while busy is ignored
+        desc(0, 1, 1 * 4, 0, 16#10000#, 20000, fill => 16#44#);
+        desc(1, 1, 1 * 4, 0, 16#18000#, 100, fill => 16#55#);
+        wr(16#D05A#, 0);
+        wr(16#D05A#, 1);                    -- ignored
+        idle(4000);
+        rd(16#D05A#, v);
+        if v(7) = '0' then
+            fail("a 20,000-byte fill finished within 4,000 clocks");
+        end if;
+        loop
+            rd(16#D05A#, v, 64);
+            exit when v(7) = '0';
+        end loop;
+        for a in 16#10000# to 16#10000# + 19999 loop
+            ref.put(1, a, 16#44#);
+        end loop;
+        desc(0, 1, 1 * 4, 0, 0, 0);         -- width 0: nothing
+        run(0, "start while busy, then width 0");
+
+        if bad_addr > 0 then
+            fail(integer'image(bad_addr) & " accesses outside the three spaces");
+        end if;
+        if errors = 0 then
+            report "PASS: VIC-X DMA";
+        else
+            report "FAILED: VIC-X DMA, " & integer'image(errors) & " failures" severity error;
+        end if;
+        done <= true;
+        wait for 100 ns;
+        if errors = 0 then
+            finish(0);
+        else
+            finish(1);
+        end if;
+        wait;
+    end process;
+
+end architecture;

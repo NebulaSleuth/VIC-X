@@ -1,8 +1,10 @@
 #!/bin/sh
 # Simulate the VIC-X block with GHDL.  Run from the UCRT64 shell:
 #   C:\msys64\usr\bin\bash.exe -lc "hdl/run_sim.sh"   (MSYSTEM=UCRT64, CHERE_INVOKING=1)
-# Exits 0 when every testbench passes.  tb_vicx_step1 runs twice: with VRAM
-# in block RAM, and with external VRAM behind a memory model at C64 speed.
+# Exits 0 when every testbench passes.  Each testbench runs with VRAM in
+# block RAM, then with external VRAM behind a memory model: step 1 at C64
+# speed against random waits, step 2 against the SDRAM controller's slots,
+# also with the REU holding its slot.
 set -e
 cd "$(dirname "$0")"
 mkdir -p build
@@ -25,4 +27,6 @@ for tb in ../tb/tb_*.vhd; do
 done
 run tb_vicx_step1 -gEXT=true -gGAP=128 -gMAXLAT=16
 run tb_vicx_step1 -gEXT=true -gGAP=128 -gMAXLAT=40
+run tb_vicx_step2 -gEXT=true
+run tb_vicx_step2 -gEXT=true -gREU=true
 exit $status

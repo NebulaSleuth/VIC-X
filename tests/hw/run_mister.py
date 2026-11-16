@@ -5,7 +5,11 @@ Each test is assembled with -D HW_RESULT (the harness then shows PASS or
 FAIL xx on screen with a green or red border), copied to the MiSTer, and
 started through a launch file (MGL) that loads the C64X core fresh and the
 PRG into it.  After a few seconds the MiSTer takes a screenshot, which is
-copied back and judged by its border colour.
+copied back and judged by its border colour.  A test's `; PIXEL:` lines
+(from its first `; RUN:` block) that fall inside the 320x200 window are
+checked on the screenshot too: the MiSTer's screenshot is 382x270 with the
+window at (32,34), one line higher than VICE's 384x272 one.  Border pixels
+are not checked, since the harness colours the border.
 
 Needs SSH key access to the MiSTer as root.  Uses Windows' own OpenSSH
 client, which takes the key; Git Bash's ssh is refused by this MiSTer.
@@ -76,6 +80,35 @@ def png_border(path):
     return pixel(4, 4)
 
 
+def pixel_checks(name):
+    """(x, y, rgb, negate) from the first RUN block, window pixels only."""
+    checks, runs = [], 0
+    for line in source(name).read_text().splitlines():
+        if line.startswith("; RUN:"):
+            runs += 1
+        elif line.startswith("; PIXEL:") and runs == 1:
+            x, y, want = line.split()[2:5]
+            x, y = int(x), int(y)
+            neg = want.startswith("!")
+            want = want.lstrip("!")
+            if 32 <= x < 352 and 35 <= y < 235:
+                checks.append((x, y - 1, tuple(int(want[i:i + 2], 16) for i in (0, 2, 4)), neg))
+    return checks
+
+
+def check_pixels(name, path, tol=40):
+    import importlib
+    rt = importlib.import_module("run-tests")
+    _, _, pixel = rt.png_read(path)
+    bad = []
+    for x, y, want, neg in pixel_checks(name):
+        got = tuple(pixel(x, y)[:3])
+        close = all(abs(a - b) <= tol for a, b in zip(got, want))
+        if close == neg:
+            bad.append(f"({x},{y}) {'%02X%02X%02X' % got} {'!' if neg else ''}{'%02X%02X%02X' % want}")
+    return bad
+
+
 def verdict(rgb):
     r, g, b = rgb[:3]
     if g > r + 40 and g > b:
@@ -128,8 +161,13 @@ def main():
         local = OUT / f"{name}.png"
         scp(f"root@{args.host}:{SHOTS}/{shot}", str(local))
         v = verdict(png_border(local))
+        bad = check_pixels(name, local) if v == "pass" else []
+        if bad:
+            v = "PIXEL"
         results.append((name, v, local))
         print(f"{v:5} {name}   {local}")
+        for b in bad[:8]:
+            print(f"        pixel {b}")
 
     passed = sum(1 for _, v, _ in results if v == "pass")
     print(f"\n{passed}/{len(results)} passed (see the screenshots for FAIL codes)")

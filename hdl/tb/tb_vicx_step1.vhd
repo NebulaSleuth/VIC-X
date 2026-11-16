@@ -43,7 +43,7 @@ architecture sim of tb_vicx_step1 is
 
     -- external VRAM port and its model
     signal vx_req, vx_we, vx_ack, vx_rvalid, vx_miss : std_logic := '0';
-    signal vx_addr   : std_logic_vector(16 downto 0);
+    signal vx_addr   : std_logic_vector(24 downto 0);
     signal vx_din    : std_logic_vector(15 downto 0);
     signal vx_be     : std_logic_vector(1 downto 0);
     signal vx_rdata  : std_logic_vector(63 downto 0) := (others => '0');
@@ -102,7 +102,7 @@ begin
         for i in 1 to 1 + integer(trunc(r * real(MAXLAT))) loop
             wait until rising_edge(clk);
         end loop;
-        a := to_integer(unsigned(vx_addr));
+        a := to_integer(unsigned(vx_addr)) - 16#100000#;
         if vx_we = '1' then
             if vx_be(0) = '1' then mem((a / 2) * 2) := vx_din(7 downto 0); end if;
             if vx_be(1) = '1' then mem((a / 2) * 2 + 1) := vx_din(15 downto 8); end if;

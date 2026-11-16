@@ -8,7 +8,9 @@ checked in GHDL against the same behaviour as the VICE fork.
 |------|------|
 | `vicx.vhd` | the block; its header describes the bus, video and reset interface |
 | `tb/tb_vicx_step1.vhd` | step 1 testbench (follows conformance tests t01-t08, then a random stress of both ports) |
-| `run_sim.sh` | analyse, elaborate and run every testbench in `tb/`; step 1 also with external VRAM |
+| `tb/tb_vicx_step2.vhd` | step 2 testbench: PAL lines of video, every pixel of each frame compared with the spec (t10-t14 cases, raster splits, port traffic) |
+| `tb/tb_vicx_dma.vhd` | DMA engine testbench: each transfer also run on a reference that follows VICE's `dma_run`, memories compared |
+| `run_sim.sh` | analyse, elaborate and run every testbench in `tb/`; steps 1 and 2 also with external VRAM |
 | `sdram-vram-plan.md` | VRAM in the MiSTer's SDRAM: design, bandwidth, status |
 
     C:\msys64\usr\bin\bash.exe -lc "cd /d/Repos/VIC-X && sh hdl/run_sim.sh"
@@ -37,10 +39,18 @@ stale-fetch discard makes it fail, and so does a memory that takes up to
    register space, palette, VIC-II colour remapping, frame counter, IRQ.
    Synthesises for the MiSTer's Cyclone V with Quartus 17.0.2. Runs on the
    MiSTer in the C64X core, first with VRAM in block RAM, now in SDRAM.
-2. Bitmap layer.
+2. Done: layer 0 as a 4- or 8-bit bitmap (CAP_FEAT bit 1). The core gives
+   the block two more VIC-II outputs per pixel: drawn from `$D021`, and in
+   the 320x200 window. Each line is fetched from its own start, when the
+   setup is latched (as the spec says), into a line buffer the display
+   reads behind the fetch; on the MiSTer the fetch has about 16 C64 cycles
+   before the window's left edge, about 48 SDRAM slots for at most 41
+   blocks.
 3. Tile layers, scrolling, mixing order.
 4. Sprite engine.
-5. DMA engine and XRAM windows.
+5. DMA engine done (EXT_VRAM only, CAP_FEAT bit 3): every space through
+   the SDRAM port, C64 RAM transfers hold the CPU through RDY. XRAM windows
+   not yet.
 
 The MiSTer core it goes into is the `vicx` branch of `D:\Repos\C64X_MiSTer`
 (the MiSTer C64 core with drive 9 removed to make room for the VRAM).
