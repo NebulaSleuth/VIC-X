@@ -103,7 +103,8 @@ Step 6 (first part):
 - sprite hit masks (entry +7 bits 0-3), added when the bullet storm showed
   that shared group bits cannot keep bullets from colliding with each other
 
-Next: "Nothing breaks" (needs well-known games and demos), music for Big
+Next: "Nothing breaks" (needs well-known games and demos), a GEOS-style
+desktop demo (proposed in the spec), music for Big
 world, and running the tests on FPGA simulation and hardware.
 
 ## Building the fork
