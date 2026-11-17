@@ -46,6 +46,9 @@ def main():
                     help="seconds from launch to each screenshot")
     ap.add_argument("--no-reu", action="store_true",
                     help="load only the PRG (the demo then loads from disk)")
+    ap.add_argument("--disk", action="store_true",
+                    help="mount the demo's .d64/.d81 as drive 8 and load only the PRG "
+                         "(the demo loads its data from that disk)")
     ap.add_argument("demo")
     args = ap.parse_args()
 
@@ -53,7 +56,13 @@ def main():
     rm.ssh(args.host, f"mkdir -p {REMOTE} {rm.SHOTS}")
     rm.scp(str(prg), f"root@{args.host}:{REMOTE}/{prg.name}")
     files = ""
-    if not args.no_reu:
+    if args.disk:
+        img = DEMOS / f"{args.demo}.d64"
+        if not img.exists():
+            img = DEMOS / f"{args.demo}.d81"
+        rm.scp(str(img), f"root@{args.host}:{REMOTE}/{img.name}")
+        files += f'<file delay="1" type="s" index="0" path="vicx-demos/{img.name}"/>'
+    elif not args.no_reu:
         rm.scp(str(reu), f"root@{args.host}:{REMOTE}/{reu.name}")
         files += f'<file delay="2" type="f" index="1" path="vicx-demos/{reu.name}"/>'
     files += f'<file delay="4" type="f" index="1" path="vicx-demos/{prg.name}"/>'
