@@ -82,4 +82,7 @@ free slot, 4 slots a C64 cycle, 3 while the REU's DMA runs):
   only what turbo leaves.
 
 The MiSTer core it goes into is the `vicx` branch of `D:\Repos\C64X_MiSTer`
-(the MiSTer C64 core with drive 9 removed to make room for the VRAM).
+(the MiSTer C64 core; drive 9 was removed while VRAM was block RAM, and is
+back since VRAM moved to SDRAM). Its 1541 reads D64 tracks that the
+MiSTer's main program places in DDR3, so it needs a Main_MiSTer from May
+2026 or later; with an older one `.d64` images show no files (`.d81` work).
