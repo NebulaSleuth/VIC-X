@@ -24,6 +24,7 @@ import math
 import os
 import subprocess
 import sys
+import zlib
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "tools"))
@@ -170,7 +171,9 @@ def pack(demo, assets):
         raise SystemExit(f"{demo}: {blocks} blocks; the progress bar handles up to 223")
     (BUILD / f"{demo}.dat").write_bytes(out)
 
-    sig = f"VIC-X {demo.upper()}".ljust(16)[:16].encode("ascii")
+    # name and checksum: a changed build loads its data again, even where
+    # XRAM still holds an older build's (the MiSTer keeps the REU over resets)
+    sig = f"{demo.upper()[:9]:<9} {zlib.crc32(bytes(image[:end])) & 0xFFFFFF:06X}".encode("ascii")
     image[SIG_XRAM:SIG_XRAM + 16] = sig        # a preloaded image needs no loading
     name = f"{demo.upper()}.DAT"
     lines += ["", f"SIG_XRAM      = ${SIG_XRAM:06X}", f"DATA_BLOCKS   = {blocks}",

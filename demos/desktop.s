@@ -120,6 +120,8 @@ main:
         sta $D021
         lda #$0B                        ; blank while setting up
         sta $D011
+        lda #0                          ; the VIC-II's idle-state byte: the two
+        sta $3FFF                       ; lines above the bar text (YSCROLL 5)
 
         ; the lower-case character set from ROM to FONT
         lda #$33
