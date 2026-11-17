@@ -311,11 +311,14 @@ wait_frame:
         sta last_vf
         ; fall through
 
-; Wait until the raster is outside the display window (lines 250-311 or
-; 0-39), reading the input meanwhile.  The blitter only runs there: on the
-; MiSTer, its SDRAM traffic during the display can make a layer miss its
-; fetch, and the line shows black.
+; Built with BORDER_BLIT: wait until the raster is outside the display
+; window (lines 250-311 or 0-39), reading the input meanwhile, so the
+; blitter only runs there.  Needed on a MiSTer core from before 2026-11-17,
+; whose DMA engine could make a layer miss its fetch (black lines); since
+; then the engine waits for the layers itself, and this only reads the
+; input.
 gate:   jsr poll
+.ifdef BORDER_BLIT
         lda $D011
         bmi @ok                         ; lines 256 up
         lda $D012
@@ -323,7 +326,9 @@ gate:   jsr poll
         bcs @ok
         cmp #40
         bcs gate
-@ok:    rts
+@ok:
+.endif
+        rts
 
 ; Draw the hidden buffer's dirty rectangle, to be shown next frame.
 paint:  ldx back

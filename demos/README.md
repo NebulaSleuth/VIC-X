@@ -166,10 +166,11 @@ the REU, a demo says what is missing and stops.
   windows and the menus are pictures in XRAM; a change marks a rectangle
   dirty, and each frame the hidden buffer's dirty rectangle is redrawn
   (desktop, then the windows from the back, clipped) and shown at the next
-  frame, so nothing half-drawn is ever seen. The blitter only runs while
-  the beam is outside the display window, in chunks of about 2 KB: on the
-  MiSTer, DMA during the display made the bitmap layer miss fetches,
-  which showed as black lines. The menu bar shows the redraw rate next
+  frame, so nothing half-drawn is ever seen. On a MiSTer core from before 2026-11-17, DMA during the display
+  made the bitmap layer miss fetches (black lines); build with
+  `VICX_DEMO_DEFS=BORDER_BLIT` for such a core, and the blitter only runs
+  while the beam is outside the display window. Where the front window
+  covers the dirty rectangle, nothing under it is drawn. The menu bar shows the redraw rate next
   to the CPU load ("50 fps" when every redraw is shown the next frame,
   "--" while nothing changes). The buttons and the mouse are
   read while the CPU waits for the frame or the blitter, so short clicks
