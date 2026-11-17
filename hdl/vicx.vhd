@@ -77,7 +77,12 @@
 --   engine works a byte at a time from an 8-byte read cache and writes words
 --   (two bytes) at a time; VRAM writes go through the port write queue, so
 --   the port copies stay right.  It takes the port after the CPU's writes,
---   the port fetches and the line fetch.  While a descriptor that touches C64
+--   the port fetches and the line fetch, and not at all while a layer or the
+--   sprite engine is fetching its line (u_busy): a read slipped in between
+--   two of their blocks brings four queued writes that go before them, and
+--   that made a layer late once the window starts early in the line (seen
+--   on the MiSTer as black lines while the blitter ran during the display;
+--   tb_vicx_step2 with DMA and WX 40).  While a descriptor that touches C64
 --   RAM runs, cpu_halt is high; the core holds the CPU the way the VIC-II's
 --   BA does.
 --
@@ -340,6 +345,7 @@ architecture rtl of vicx is
     signal u_req      : std_logic_vector(2 downto 0);
     signal u_addr     : uaddr_t;
     signal u_gnt      : std_logic_vector(2 downto 0) := "000";
+    signal u_busy     : std_logic_vector(2 downto 0);   -- a client is fetching its line
     signal u_valid    : std_logic_vector(2 downto 0) := "000";
     signal u_data     : std_logic_vector(63 downto 0) := (others => '0');
     signal u_pref     : std_logic := '0';          -- whose turn when both ask
@@ -621,7 +627,7 @@ begin
                 line_start => line_start, enable => ctrl(n),
                 win_y => win_y, in_win => in_win, width => win_w, setup => l_set(n),
                 f_req => u_req(n), f_addr => u_addr(n), f_gnt => u_gnt(n),
-                f_valid => u_valid(n), f_data => u_data,
+                f_valid => u_valid(n), f_data => u_data, f_busy => u_busy(n),
                 x => vx_x, q_idx => q_idx(n), q_ok => q_ok(n), q_late => q_late(n));
     end generate;
 
@@ -673,7 +679,7 @@ begin
                 raster_y => unsigned(raster_y), line_on => ctrl(2),
                 win_first => win_first, win_last => win_last, width => win_w,
                 f_req => u_req(2), f_addr => u_addr(2), f_gnt => u_gnt(2),
-                f_valid => u_valid(2), f_data => u_data,
+                f_valid => u_valid(2), f_data => u_data, f_busy => u_busy(2),
                 x => vx_x, x_done => x_done, q_front => sp_front, q_behind => sp_behind,
                 p_req => sp_preq, p_addr => sp_paddr, p_data => sp_pdata, p_ack => sp_pack,
                 coll_irq => sp_irq);
@@ -681,6 +687,7 @@ begin
     gen_nospr : if not HAS_SPR generate
         u_req(2)  <= '0';
         u_addr(2) <= (others => '0');
+        u_busy(2) <= '0';
     end generate;
 
     -- palette entries 16-255 for the display: follow every write to them
@@ -1302,7 +1309,9 @@ begin
                     when DM_FLUSH =>
                         if dm_wvram = '1' then
                             -- VRAM: into the port write queue, updating the copies
-                            if wqc < 16 then
+                            -- (not while a layer or the sprites fetch: queued
+                            -- writes go before their reads)
+                            if wqc < 16 and u_busy = "000" then
                                 wq_addr(to_integer(wqw)) <= dm_wa(16 downto 1) & '0';
                                 wq_data(to_integer(wqw)) <= dm_wd;
                                 wq_be(to_integer(wqw))   <= dm_wbe;
@@ -1508,8 +1517,11 @@ begin
                         eng       <= E_RREQ;
                         issued    := true;
                     end if;
-                    -- then the DMA engine
-                    if not issued and dmr_req = '1' and rqn = 0 then
+                    -- then the DMA engine, only while no layer and not the
+                    -- sprites are fetching: between two of their blocks a
+                    -- DMA read and the writes it brings would take the slots
+                    -- they need to keep ahead of the display
+                    if not issued and dmr_req = '1' and rqn = 0 and u_busy = "000" then
                         addr_r  <= std_logic_vector(dmr_addr);
                         din_r   <= dm_wd;
                         be_r    <= dm_wbe;

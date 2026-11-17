@@ -4,7 +4,8 @@
 # Exits 0 when every testbench passes.  Each testbench runs with VRAM in
 # block RAM, then with external VRAM behind a memory model: step 1 at C64
 # speed against random waits, step 2 against the SDRAM controller's slots,
-# also with the REU holding its slot.
+# also with the REU holding its slot, and with the DMA engine copying all
+# frame long while the window starts early in the line.
 set -e
 cd "$(dirname "$0")"
 mkdir -p build
@@ -29,6 +30,7 @@ run tb_vicx_step1 -gEXT=true -gGAP=128 -gMAXLAT=16
 run tb_vicx_step1 -gEXT=true -gGAP=128 -gMAXLAT=40
 run tb_vicx_step2 -gEXT=true
 run tb_vicx_step2 -gEXT=true -gREU=true
+run tb_vicx_step2 -gEXT=true -gDMA=true -gWX=40
 run tb_vicx_step3 -gEXT=true
 run tb_vicx_step4 -gEXT=true
 run tb_vicx_wide -gEXT=true

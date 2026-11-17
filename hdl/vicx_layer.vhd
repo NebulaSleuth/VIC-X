@@ -41,6 +41,7 @@ entity vicx_layer is
         f_gnt      : in  std_logic;
         f_valid    : in  std_logic;
         f_data     : in  std_logic_vector(63 downto 0);
+        f_busy     : out std_logic;                        -- fetching this line's blocks
 
         x          : in  unsigned(8 downto 0);
         q_idx      : out std_logic_vector(7 downto 0);
@@ -131,6 +132,7 @@ begin
 
     f_req  <= req_r;
     f_addr <= addr_r;
+    f_busy <= '0' when st = S_IDLE or st = S_DONE else '1';
 
     -- line buffer: one write port (two words over two clocks), one read port
     pb_mem : process (clk)

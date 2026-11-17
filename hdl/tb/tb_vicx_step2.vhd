@@ -9,6 +9,9 @@
 -- With EXT, VRAM is behind a model of the SDRAM controller's VIC-X port that
 -- takes a request only at the start of a VIC-X slot (4 of the 8 slots in
 -- each C64 cycle, 3 with REU DMA running) and answers like the controller.
+-- With DMA as well, a VRAM-to-VRAM copy of 128 KB onto itself (the contents
+-- stay the same) runs through every checked frame, so the layer's fetch
+-- competes with the DMA engine for the slots.
 -- Run with hdl/run_sim.sh; prints PASS or the failures and exits 1.
 
 library ieee;
@@ -21,6 +24,8 @@ entity tb_vicx_step2 is
     generic (
         EXT  : boolean := false;    -- VRAM through the vx_* port
         REU  : boolean := false;    -- REU DMA holds the DMA0 slot (EXT only)
+        DMA  : boolean := false;    -- the DMA engine copies VRAM onto itself
+                                    -- all through each checked frame (EXT only)
         WX   : natural := 120       -- first window pixel in the line
     );
 end entity;
@@ -28,6 +33,11 @@ end entity;
 architecture sim of tb_vicx_step2 is
 
     constant LINE_CLK  : natural := 63 * 32;
+    function feat_of(d : boolean) return std_logic_vector is
+    begin
+        if d then return x"0A"; else return x"02"; end if;
+    end function;
+    constant FEAT      : std_logic_vector(7 downto 0) := feat_of(DMA and EXT);
     constant LINE_PIX  : natural := LINE_CLK / 4;
     constant LINES     : natural := 312;
 
@@ -148,7 +158,7 @@ begin
     end generate;
 
     dut : entity work.vicx
-        generic map (VRAM_BITS => 17, CAP_SPR => 0, CAP_SPRLINE => 0, CAP_FEAT => x"02",
+        generic map (VRAM_BITS => 17, CAP_SPR => 0, CAP_SPRLINE => 0, CAP_FEAT => FEAT,
                      EXT_VRAM => EXT)
         port map (
             clk => clk, reset => reset,
@@ -495,10 +505,19 @@ begin
             end loop;
         end procedure;
 
+        -- start the copy (descriptor 0); ignored while one runs
+        procedure dma_start is
+        begin
+            if DMA and EXT then
+                wr(16#D05A#, 0);
+            end if;
+        end procedure;
+
         procedure frame_check(what : string) is
             variable e0, c0, s0 : natural;
         begin
             wait_frame;
+            dma_start;
             e0 := vid_err; c0 := compared; s0 := shown;
             wait_frame;
             report what & ": " & integer'image(compared - c0) & " pixels, " &
@@ -515,8 +534,8 @@ begin
 
         -- CAP_FEAT
         rd(16#D047#, v);
-        if v /= x"02" then
-            report "FAIL: CAP_FEAT $" & hex(v) & ", want $02" severity error;
+        if v /= FEAT then
+            report "FAIL: CAP_FEAT $" & hex(v) & ", want $" & hex(FEAT) severity error;
             errors := errors + 1;
         end if;
 
@@ -539,6 +558,31 @@ begin
             ref_pal(i) <= pal_val(i);
         end loop;
 
+        -- descriptor 0: VRAM onto itself, 4096 x 32, 2D
+        if DMA and EXT then
+            port_set(0, 16#20880#);
+            wr(16#D04F#, 16#00#);
+            wr(16#D04F#, 16#15#);
+            wr(16#D04F#, 16#00#);
+            wr(16#D04F#, 16#00#);
+            wr(16#D04F#, 16#00#);
+            wr(16#D04F#, 16#00#);
+            wr(16#D04F#, 16#00#);
+            wr(16#D04F#, 16#00#);
+            wr(16#D04F#, 16#00#);
+            wr(16#D04F#, 16#00#);
+            wr(16#D04F#, 16#00#);
+            wr(16#D04F#, 16#10#);
+            wr(16#D04F#, 16#20#);
+            wr(16#D04F#, 16#00#);
+            wr(16#D04F#, 16#00#);
+            wr(16#D04F#, 16#10#);
+            wr(16#D04F#, 16#00#);
+            wr(16#D04F#, 16#10#);
+            wr(16#D04F#, 16#00#);
+            wr(16#D04F#, 16#00#);
+            wr(16#D04F#, 16#FF#);
+        end if;
         checking <= true;
 
         -- 8-bit, unaligned base, 320 bytes a line
@@ -580,6 +624,7 @@ begin
         -- port traffic all frame long
         set_layer(16#03#, 16#00000#, 320, 0);
         wait_frame;
+        dma_start;
         wait_line(60);
         traffic(20);
         wait_line(100);
@@ -608,6 +653,7 @@ begin
         -- every byte of a setup rewritten while lines start, and traffic
         set_ctrl(16#11#);
         wait_frame;
+        dma_start;
         wait_line(120);
         for k in 0 to 9 loop
             set_layer(16#03# + 8 * (k mod 2), 16#00100# * k + k, 320 + k, 0);

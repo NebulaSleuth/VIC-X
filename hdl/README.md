@@ -73,6 +73,13 @@ free slot, 4 slots a C64 cycle, 3 while the REU's DMA runs):
 - While REU DMA runs, two 8x8 8-bit tile layers, or the heaviest sprite
   line (640 8-bit pixels) over two layers, can miss pixels (drawn
   transparent, `lay_late`). Without REU DMA they fit.
+- The DMA engine waits while a layer or the sprite engine fetches its
+  line, so it cannot make them late; it runs in the rest of each line
+  and in the border. Measured (`tests/hw/dma_bench.s`, 2026-11-17, before
+  that change): 64,000 bytes XRAM to VRAM in 191 raster lines (about
+  5.2 MB/s), a fill in 127 lines (7.9 MB/s), 217 lines with an 8-bit
+  bitmap layer on. Copies are under the spec's 8 MB/s target: each 8
+  bytes take one read slot and four one-word write slots.
 - Collisions are checked one pair a clock as each line shows. A heap of
   sprites with hundreds of pairs at a pixel falls behind, so the list can
   hold other pairs than VICE's; the count (127) and the full flag agree.
