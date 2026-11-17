@@ -19,11 +19,12 @@
 ; the About box's numbers from the capability registers, and the notes,
 ; typed a letter at a time.
 ;
-; Controls: a 1351 mouse in port 1 or a joystick in port 2.  Double-click
-; an icon to open its window, drag a window by its title bar, click the
-; box on the left of the title to close it, click a window to bring it to
-; the front, click a menu title and then an item.  When nobody touches
-; the controls for a while, the demo plays a script that does all of it.
+; Controls: a 1351 mouse in either port, or a joystick in port 2; the left
+; button or fire clicks.  Double-click an icon to open its window, drag a
+; window by its title bar, click the box on the left of the title to close
+; it, click a window to bring it to the front, click a menu title and then
+; an item.  A test build (VICX_DEMO_DEFS=DESK_TEST) plays a script that
+; does all of it, for checking the demo in headless VICE.
 
 NEED_XRAM_MB = 2
 CPU_TEXT     = $0400 + 32           ; menu bar, right
@@ -39,8 +40,6 @@ TILES_V = $11000                    ; desktop tiles
 FONT    = $C000                     ; lower-case character set, from ROM
 WIN_SLOT = $A000                    ; XRAM window 0 for writing text
 
-IDLE_FIRST = 50                     ; frames before the script starts
-IDLE_AGAIN = 1500                   ; ... and again after the last input
 DBL_FRAMES = 30                     ; double-click time
 TYPE_RATE  = 4                      ; frames per letter
 BLACK      = 16
@@ -211,11 +210,34 @@ main:
         sta VICX_P0_DATA
         SPRITE 0, 160, 100, VICX_SW_16 | VICX_SH_16, VICX_S_ON, PTR_V, VICX_S_8BIT
 
-        ; port 1's paddle lines to the SID (the 1351 mouse)
+        ; the paddle lines of each port in turn to the SID (a 1351 mouse in
+        ; either port); a selection needs a while before the SID has read it
         lda #$C0
         sta $DC02
-        lda #$40
+        lda #$80                        ; port 2
         sta $DC00
+        ldx #100
+        jsr wait_line
+        ldx #200
+        jsr wait_line
+        lda $D419
+        sta opotx + 1
+        lda $D41A
+        sta opoty + 1
+        lda #$40                        ; port 1
+        sta $DC00
+        ldx #100
+        jsr wait_line
+        ldx #200
+        jsr wait_line
+        lda $D419
+        sta opotx
+        lda $D41A
+        sta opoty
+        lda #0
+        sta psel
+        lda #$FF
+        sta mport                       ; no mouse seen yet
 
         lda #<160
         sta px
@@ -230,18 +252,12 @@ main:
         sta jspeed
         lda #$FF
         sta menu_open
-        lda #<IDLE_FIRST
-        sta idle
-        lda #>IDLE_FIRST
-        sta idle + 1
-        lda #1
-        sta attract
         jsr reset_desktop
+.ifdef DESK_TEST
+        lda #1                          ; test build: the script plays
+        sta attract
         jsr start_script
-        lda $D419
-        sta opotx
-        lda $D41A
-        sta opoty
+.endif
 
         lda #$17                        ; screen $0400, lower-case set
         sta $D018
@@ -257,10 +273,13 @@ loop:
         jsr cpu_start
         inc frame
         jsr read_input
+.ifdef DESK_TEST
         lda attract
         beq :+
         jsr script_step
-:       jsr place_pointer
+:
+.endif
+        jsr place_pointer
         jsr ui_step
         jsr type_step
         jsr rainbow_step
@@ -268,9 +287,9 @@ loop:
         jmp loop
 
 ; --- input ----------------------------------------------------------------
-; Joystick 2 and the mouse move (px, py); in_btn = a button is down.
-; Any input stops the script; without input for IDLE_AGAIN frames the
-; script starts again.
+; Joystick 2 and the mouse move (px, py); in_btn = a button is down.  Until
+; a mouse has moved, the SID reads port 1's and port 2's paddle lines in
+; turns, a frame each; the first that moves is the mouse's port from then on.
 read_input:
         lda #0
         sta active
@@ -345,37 +364,55 @@ read_input:
         sta px
         bcc @mouse
         inc px + 1
-@mouse: lda $D419
-        ldy opotx
+@mouse: ldx psel
+        ldy opotx,x
+        lda $D419
         jsr movchk
-        sty opotx
-        cmp #0
-        beq :+
-        inc active
+        sta mdx
+        stx mdxs
+        tya
+        ldx psel
+        sta opotx,x
+        ldy opoty,x
+        lda $D41A
+        jsr movchk
+        sta mdy
+        stx mdys
+        tya
+        ldx psel
+        sta opoty,x
+        lda #0
+        sta pyh
+        lda mdx
+        ora mdy
+        beq @still
+        lda mport                       ; the first port that moves is the mouse's
+        bpl :+
+        lda psel
+        sta mport
+:       inc active
+        lda mdx                         ; px += dx
         clc
         adc px
         sta px
-        txa
+        lda mdxs
         adc px + 1
         sta px + 1
-:       lda #0
-        sta pyh
-        lda $D41A
-        ldy opoty
-        jsr movchk
-        sty opoty
-        cmp #0
-        beq @clamp
-        inc active
-        sta t0                          ; (py, pyh) -= delta, sign in X
-        stx t3
-        lda py
+        lda py                          ; (py, pyh) -= dy
         sec
-        sbc t0
+        sbc mdy
         sta py
         lda #0
-        sbc t3
+        sbc mdys
         sta pyh
+@still: lda mport
+        bpl @clamp
+        lda psel                        ; no mouse yet: the other port next
+        eor #1
+        sta psel
+        tax
+        lda port_sel,x
+        sta $DC00
 @clamp: lda px + 1                      ; px: 0-319
         bpl :+
         lda #0
@@ -400,33 +437,20 @@ read_input:
 @ytop:  lda #0
         sta py
 @yok:
+.ifdef DESK_TEST
+        lda attract                     ; test build: the script has the button
+        beq :+                          ; until something moves
         lda active
-        beq @idle
+        beq @rts
         lda #0
         sta attract
-        lda #<IDLE_AGAIN
-        sta idle
-        lda #>IDLE_AGAIN
-        sta idle + 1
+:
+.endif
         lda t1
         sta in_btn
-        rts
-@idle:  lda attract
-        bne @rts
-        lda t1
-        sta in_btn
-        lda idle
-        bne :+
-        dec idle + 1
-:       dec idle
-        lda idle
-        ora idle + 1
-        bne @rts
-        lda #1
-        sta attract
-        jsr reset_desktop
-        jsr start_script
 @rts:   rts
+
+port_sel: .byte $40, $80                ; $DC00: port 1's or port 2's paddle lines
 
 ; 1351: A = new pot value, Y = old -> A = signed movement, X = sign,
 ; Y = value to keep (the old one when there was no movement)
@@ -465,7 +489,8 @@ place_pointer:
         sta VICX_P0_DATA
         rts
 
-; --- the script --------------------------------------------------------------
+; --- the script (test builds only: VICX_DEMO_DEFS=DESK_TEST) --------------
+.ifdef DESK_TEST
 start_script:
         lda #<script
         sta sc_pc
@@ -603,6 +628,8 @@ sc_skip:
         bcc :+
         inc sc_pc + 1
 :       rts
+
+.endif
 
 ; --- the user interface -----------------------------------------------------
 ; state: 0 nothing, 1 dragging window `drag_win', 2 a menu is open
@@ -2142,10 +2169,15 @@ pressed:    .res 1
 released:   .res 1
 active:     .res 1
 attract:    .res 1
-idle:       .res 2
 jspeed:     .res 1
-opotx:      .res 1
-opoty:      .res 1
+opotx:      .res 2                  ; per port
+opoty:      .res 2
+psel:       .res 1                  ; port whose paddle lines the SID reads
+mport:      .res 1                  ; the mouse's port, $FF until it moves
+mdx:        .res 1
+mdxs:       .res 1
+mdy:        .res 1
+mdys:       .res 1
 sc_wait:    .res 1
 state:      .res 1
 hit_win:    .res 1

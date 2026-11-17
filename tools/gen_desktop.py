@@ -16,7 +16,7 @@ the text itself, with the C64's character ROM, into the images in XRAM):
   desk_menu0-2.img        the three menus, and desk_menu0-2i.img with
                           every item highlighted
   desktop/desktop.inc     sizes, positions, menus, texts, the notes text,
-                          the demo script, the zoom rectangles
+                          a test build's script, the zoom rectangles
 
 The photo is art/desktop_photo.png (160x100, made by prep_art.py).  Text
 in desktop.inc is in screen codes for the C64's lower-case character set.
@@ -442,7 +442,7 @@ def main():
             steps.append(tuple(round(a[j] + (b[j] - a[j]) * s / 9) for j in range(4)))
         zoom.append(steps)
 
-    # the script the demo plays when nobody touches the controls
+    # the script a test build plays (headless VICE has no mouse)
     script = []
 
     def move(x, y):
@@ -604,9 +604,11 @@ def main():
             L.append(f"        .byte {x1 & 255}, {x1 >> 8}, {y1}, {x2 & 255}, {x2 >> 8}, {y2}")
     bytes_line("row_lo", [(y * 320) & 255 for y in range(200)])
     bytes_line("row_hi", [(y * 320) >> 8 for y in range(200)])
+    L.append(".ifdef DESK_TEST          ; the test build's script")
     L.append("script:")
     for s in script:
         L.append(f"        .byte {s}")
+    L.append(".endif")
     L += [".popseg", ""]
     with open(os.path.join(out, "desktop", "desktop.inc"), "w", newline="\n") as f:
         f.write("\n".join(L))

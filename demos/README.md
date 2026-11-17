@@ -13,7 +13,7 @@ the CPU has to do while VIC-X does the work.
 | `bigworld` | A 320x3198 world (1 MB, six scenes from space to a molten core) scrolling up and down, one new row streamed in per frame | XRAM, a 256-row VRAM ring with a wrapping bitmap base, row DMA, XRAM window (scene table), REU DMA (captions) |
 | `wide` | The parallax world switching every 5 seconds between the 320x200 window and the whole visible frame; in full-frame mode the text bar moves to the top of the frame | wide window, edges latched per line and per frame, scroll offsets that keep the scene still, a sprite-engine text bar, layer order |
 | `sixteen` | A plain C64 multicolour bitmap, alternating between the stock palette and 16 colours picked for the picture | VIC-II colour remap (CTRL bit 3) |
-| `desktop` | A GEOS-style desktop: icons, menus, overlapping windows (notes that type themselves, a photo, the palette, an About box) dragged with a mouse or joystick; with nobody at the controls it plays a script | tile layer (desktop) behind a bitmap layer (windows), VIC-II text between them, sprite pointer, 2D DMA copies and fills from XRAM, XRAM window (the CPU writes text into the window pictures), layer order, palette rotation |
+| `desktop` | A GEOS-style desktop: icons, menus, overlapping windows (notes that type themselves, a photo, the palette, an About box) dragged with a mouse or joystick | tile layer (desktop) behind a bitmap layer (windows), VIC-II text between them, sprite pointer, 2D DMA copies and fills from XRAM, XRAM window (the CPU writes text into the window pictures), layer order, palette rotation |
 
 ## Artwork
 
@@ -153,13 +153,16 @@ the REU, a demo says what is missing and stops.
   to the colours VICE 3.10 shows by default, which are not those of every
   real C64 or palette setting.
 - `bigworld` has no music yet (the spec's "Big world" also streams music).
-- `desktop`: move the pointer with a 1351 mouse in port 1 (on the MiSTer,
-  set Pot 1/2 to Mouse) or a joystick in port 2; the left button or fire
-  clicks. Double-click an icon to open its window (Trash closes them all),
-  drag a window by its title bar, click the box at the left of the title
-  to close it, click a window to bring it to the front, click a menu title
-  and then an item (View changes the wallpaper). After 30 seconds without
-  input the script takes over again, from a clean desktop. A moved window
+- `desktop`: move the pointer with a 1351 mouse in either port (on the
+  MiSTer, set Pot 1/2 or Pot 3/4 to Mouse; until the mouse moves, the demo
+  reads both ports in turn) or a joystick in port 2; the left button or
+  fire clicks. Double-click an icon to open its window (Trash closes them
+  all), drag a window by its title bar, click the box at the left of the
+  title to close it, click a window to bring it to the front, click a menu
+  title and then an item (View changes the wallpaper). An Amiga mouse does
+  not work: it needs a 1351 adapter. A test build
+  (`VICX_DEMO_DEFS=DESK_TEST python build.py desktop`) plays a script that
+  does all of this, for checking it in headless VICE. A moved window
   costs two repaints a frame: the strips it uncovers (cleared, then the
   windows below copied in, clipped) and the window at its new place, all
   by DMA. Its program is longer than the others, so it moves the loader's
