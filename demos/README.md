@@ -166,7 +166,10 @@ the REU, a demo says what is missing and stops.
   windows and the menus are pictures in XRAM; a change marks a rectangle
   dirty, and each frame the hidden buffer's dirty rectangle is redrawn
   (desktop, then the windows from the back, clipped) and shown at the next
-  frame, so nothing half-drawn is ever seen. The buttons and the mouse are
+  frame, so nothing half-drawn is ever seen. The blitter only runs while
+  the beam is outside the display window, in chunks of about 2 KB: on the
+  MiSTer, DMA during the display made the bitmap layer miss fetches,
+  which showed as black lines. The buttons and the mouse are
   read while the CPU waits for the frame or the blitter, so short clicks
   count and the 1351's 6-bit counters do not wrap between reads; two mouse
   counts move the pointer one pixel. Its program is longer than the others, so it moves the loader's
