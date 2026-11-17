@@ -1599,7 +1599,107 @@ dirty_item:
 
 ; Redraw r in the hidden buffer: the desktop, the windows from the back,
 ; the zoom outline, the open menu and its highlighted item.
+; The front window is opaque, so what lies under it is not drawn: the
+; parts of r outside it (up to four bands) get the desktop and every
+; window, the part inside it only that window.
 repaint:
+        ldx #5
+:       lda r_x1,x
+        sta rs,x
+        dex
+        bpl :-
+        ldy zcount
+        bne :+
+        jmp @all
+:       ldx zlist - 1,y                 ; the front window, without its shadow
+        stx top_w
+        jsr load_win
+        MOVW o_x, a_x1
+        lda o_y
+        sta a_y1
+        lda o_w
+        ADDW8 o_x, a_x2
+        lda o_y
+        clc
+        adc o_h
+        sta a_y2
+        jsr intersect
+        bcc :+
+        jmp @all
+:       ldx #5
+:       lda i_x1,x
+        sta ts,x
+        dex
+        bpl :-
+        lda ts + 2                      ; above it
+        cmp rs + 2
+        beq :+
+        jsr r_rs
+        lda ts + 2
+        sta r_y2
+        jsr layers
+:       lda ts + 5                      ; below it
+        cmp rs + 5
+        beq :+
+        jsr r_rs
+        lda ts + 5
+        sta r_y1
+        jsr layers
+:       lda ts                          ; left of it
+        cmp rs
+        bne @left
+        lda ts + 1
+        cmp rs + 1
+        beq :+
+@left:  jsr r_rs
+        lda ts + 2
+        sta r_y1
+        lda ts + 5
+        sta r_y2
+        lda ts
+        sta r_x2
+        lda ts + 1
+        sta r_x2 + 1
+        jsr layers
+:       lda ts + 3                      ; right of it
+        cmp rs + 3
+        bne @right
+        lda ts + 4
+        cmp rs + 4
+        beq :+
+@right: jsr r_rs
+        lda ts + 2
+        sta r_y1
+        lda ts + 5
+        sta r_y2
+        lda ts + 3
+        sta r_x1
+        lda ts + 4
+        sta r_x1 + 1
+        jsr layers
+:       ldx #5                          ; the front window itself
+:       lda ts,x
+        sta r_x1,x
+        dex
+        bpl :-
+        ldx top_w
+        jsr load_win
+        jsr draw_obj
+        jsr r_rs
+        jmp overlay
+@all:   jsr layers
+        jmp overlay
+
+; r = rs
+r_rs:   ldx #5
+:       lda rs,x
+        sta r_x1,x
+        dex
+        bpl :-
+        rts
+
+; Desktop and windows (back to front) clipped to r.
+layers:
         MOVW r_x1, i_x1
         MOVW r_x2, i_x2
         lda r_y1
@@ -1611,7 +1711,7 @@ repaint:
         sta zk
 @lp:    lda zk
         cmp zcount
-        bcs @zoom
+        bcs @done
         tax
         lda zlist,x
         tax
@@ -1619,7 +1719,11 @@ repaint:
         jsr draw_obj
         inc zk
         bne @lp
-@zoom:  lda zoom_on
+@done:  rts
+
+; The zoom outline and the open menu over r.
+overlay:
+        lda zoom_on
         beq @menu
         jsr draw_outline
 @menu:  ldx menu_open
@@ -2436,6 +2540,9 @@ nx:         .res 2
 ny:         .res 1
 mv_win:     .res 1
 zk:         .res 1
+rs:         .res 6                  ; repaint: the whole rectangle
+ts:         .res 6                  ; ... and the part the front window covers
+top_w:      .res 1
 zcount:     .res 1
 zlist:      .res NWIN + 1
 win_open:   .res NWIN
