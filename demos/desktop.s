@@ -247,6 +247,8 @@ main:
         sta $D011
         lda #VICX_CTRL_SPR | VICX_CTRL_L0 | VICX_CTRL_BGTRANS
         sta VICX_CTRL
+        lda VICX_FRAME
+        sta last_vf
 
 ; --- the frame loop -------------------------------------------------------
 loop:
@@ -283,23 +285,29 @@ loop:
 
 ; Wait for raster lines 251-255 (below the display window), reading the
 ; input meanwhile.
+; Wait for the next frame (VICX_FRAME), then for the border lines; a frame
+; whose redraw ran on into the next frame's border goes on at once.
 wait_frame:
 :       jsr poll
-        jsr at_line
-        bcs :-                          ; still there from last time
-:       jsr poll
-        jsr at_line
-        bcc :-
-        rts
+        lda VICX_FRAME
+        cmp last_vf
+        beq :-
+        sta last_vf
+        ; fall through
 
-at_line:
+; Wait until the raster is outside the display window (lines 250-311 or
+; 0-39), reading the input meanwhile.  The blitter only runs there: on the
+; MiSTer, its SDRAM traffic during the display can make a layer miss its
+; fetch, and the line shows black.
+gate:   jsr poll
         lda $D011
-        bmi :+
+        bmi @ok                         ; lines 256 up
         lda $D012
-        cmp #251
-        rts
-:       clc
-        rts
+        cmp #250
+        bcs @ok
+        cmp #40
+        bcs gate
+@ok:    rts
 
 ; Draw the hidden buffer's dirty rectangle, to be shown next frame.
 paint:  ldx back
@@ -1160,8 +1168,101 @@ intersect:
 @empty: sec
         rts
 
-; Write descriptor 0 from d_* and run it, reading the input while it runs.
+; Run the transfer in d_* outside the display window: a 2D one in chunks of
+; about 2 KB (rows of d_w bytes), each started in the border lines.
 dma_go:
+        lda d_flags
+        and #VICX_DMA_2D
+        bne :+
+        jsr gate
+        jmp dma_run
+:       lda d_w + 1                     ; rows a chunk: about 2048 / width
+        bne @w256
+        lda d_w
+        ldx #0
+:       cmp chunk_w,x
+        bcc :+
+        beq :+
+        inx
+        cpx #5
+        bne :-
+:       lda chunk_rows,x
+        bne @rpc
+@w256:  lda #6                          ; 256-320 bytes wide
+@rpc:   sta rpc
+        lda d_h
+        sta rows_left
+@chunk: lda rows_left
+        cmp rpc
+        bcc :+
+        lda rpc
+:       sta d_h
+        jsr gate
+        jsr dma_run
+        lda rows_left
+        sec
+        sbc d_h
+        sta rows_left
+        beq @done
+        lda d_ss                        ; src += rows x source stride
+        sta m16
+        lda d_ss + 1
+        sta m16 + 1
+        jsr mul_h
+        lda d_src
+        clc
+        adc m_res
+        sta d_src
+        lda d_src + 1
+        adc m_res + 1
+        sta d_src + 1
+        bcc :+
+        inc d_src + 2
+:       lda d_ds                        ; dst += rows x destination stride
+        sta m16
+        lda d_ds + 1
+        sta m16 + 1
+        jsr mul_h
+        lda d_dst
+        clc
+        adc m_res
+        sta d_dst
+        lda d_dst + 1
+        adc m_res + 1
+        sta d_dst + 1
+        bcc @chunk
+        inc d_dst + 2
+        jmp @chunk
+@done:  rts
+
+; up to this width (bytes), this many rows a chunk
+chunk_w:    .byte 8, 16, 32, 64, 128, 255
+chunk_rows: .byte 255, 128, 64, 32, 16, 8
+
+; m_res = m16 x d_h (16 bit)
+mul_h:  lda #0
+        sta m_res
+        sta m_res + 1
+        lda d_h
+        sta t0
+        ldx #8
+:       asl m_res
+        rol m_res + 1
+        asl t0
+        bcc :+
+        lda m_res
+        clc
+        adc m16
+        sta m_res
+        lda m_res + 1
+        adc m16 + 1
+        sta m_res + 1
+:       dex
+        bne :--
+        rts
+
+; Write descriptor 0 from d_* and run it, reading the input while it runs.
+dma_run:
         VICX_P0_SET VICX_DMADESC, VICX_STEP_1
         lda d_op
         sta VICX_P0_DATA
@@ -1838,7 +1939,7 @@ notes_reset:
         ; the clean body over the typed one (XRAM to XRAM)
         lda #VICX_DMA_COPY
         sta d_op
-        lda #VICX_DMA_SRC_XRAM | VICX_DMA_DST_XRAM
+        lda #VICX_DMA_SRC_XRAM | VICX_DMA_DST_XRAM | VICX_DMA_2D
         sta d_flags
         lda #<(NOTES_CLEAN + 12 * NOTES_W)
         sta d_src
@@ -1852,16 +1953,16 @@ notes_reset:
         sta d_dst + 1
         lda #^(WIN0_IMG + 12 * NOTES_W)
         sta d_dst + 2
-        lda #<((NOTES_H - 12) * NOTES_W)
+        lda #NOTES_W                    ; 2D, so it runs in chunks
         sta d_w
-        lda #>((NOTES_H - 12) * NOTES_W)
-        sta d_w + 1
-        lda #0
-        sta d_h
         sta d_ss
-        sta d_ss + 1
         sta d_ds
+        lda #0
+        sta d_w + 1
+        sta d_ss + 1
         sta d_ds + 1
+        lda #NOTES_H - 12
+        sta d_h
         jsr dma_go
         lda #0
         sta n_pos
@@ -2301,3 +2402,7 @@ g_rows:     .res 1
 pn_x:       .res 1
 dxl:        .res 1
 dxh:        .res 1
+last_vf:    .res 1                  ; VICX_FRAME at the last frame
+rpc:        .res 1                  ; rows a DMA chunk
+rows_left:  .res 1
+m16:        .res 2
