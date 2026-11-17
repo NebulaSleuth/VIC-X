@@ -1,6 +1,6 @@
 # VIC-X demos
 
-Five of the six demos in the spec's demo plan, and one for the wide window. Each shows its CPU load as
+Six of the seven demos in the spec's demo plan, and one for the wide window. Each shows its CPU load as
 "CPU nn%": the share of each frame the demo's own code uses (the busiest of
 every 16 frames, measured with the raster line), so you can see how little
 the CPU has to do while VIC-X does the work.
@@ -13,6 +13,7 @@ the CPU has to do while VIC-X does the work.
 | `bigworld` | A 320x3198 world (1 MB, six scenes from space to a molten core) scrolling up and down, one new row streamed in per frame | XRAM, a 256-row VRAM ring with a wrapping bitmap base, row DMA, XRAM window (scene table), REU DMA (captions) |
 | `wide` | The parallax world switching every 5 seconds between the 320x200 window and the whole visible frame; in full-frame mode the text bar moves to the top of the frame | wide window, edges latched per line and per frame, scroll offsets that keep the scene still, a sprite-engine text bar, layer order |
 | `sixteen` | A plain C64 multicolour bitmap, alternating between the stock palette and 16 colours picked for the picture | VIC-II colour remap (CTRL bit 3) |
+| `desktop` | A GEOS-style desktop: icons, menus, overlapping windows (notes that type themselves, a photo, the palette, an About box) dragged with a mouse or joystick; with nobody at the controls it plays a script | tile layer (desktop) behind a bitmap layer (windows), VIC-II text between them, sprite pointer, 2D DMA copies and fills from XRAM, XRAM window (the CPU writes text into the window pictures), layer order, palette rotation |
 
 ## Artwork
 
@@ -34,7 +35,9 @@ Big world scenes and the lighthouse were generated with Google's Nano Banana Pro
 To change a picture, replace it in `art/raw/` (or generate a new one with
 `nanobanana.py "prompt" art/raw/name.jpg --aspect 16:9`, with
 `GEMINI_API_KEY` set) and build with `--prep`. The bullets are still drawn
-by `../tools/gen_art.py`.
+by `../tools/gen_art.py`, and the desktop (wallpaper, icons, window
+frames, menus, pointer) by `../tools/gen_desktop.py`; its photo is the
+castle picture again, as `art/desktop_photo.png` (160x100, 160 colours).
 
 Everything goes through `../tools/png2vicx.py`, the same converter you
 would use for your own PNGs.
@@ -76,6 +79,7 @@ standard interleave the fast loader still works, at half the speed.
 | Demo | Disk | Packed data | Fast loader (VICE) | KERNAL |
 |------|------|-------------|--------------------|--------|
 | `sixteen` | D64 | 14 KB | 10 s | about 40 s |
+| `desktop` | D64 | 20 KB | 16 s | about 1 minute |
 | `parallax` | D64 | 44 KB | 29 s | about 2 minutes |
 | `wide` | D64 | 52 KB | 34 s | about 2.5 minutes |
 | `bullets` | D64 | 59 KB | 37 s | about 2.5 minutes |
@@ -149,5 +153,19 @@ the REU, a demo says what is missing and stops.
   to the colours VICE 3.10 shows by default, which are not those of every
   real C64 or palette setting.
 - `bigworld` has no music yet (the spec's "Big world" also streams music).
+- `desktop`: move the pointer with a 1351 mouse in port 1 (on the MiSTer,
+  set Pot 1/2 to Mouse) or a joystick in port 2; the left button or fire
+  clicks. Double-click an icon to open its window (Trash closes them all),
+  drag a window by its title bar, click the box at the left of the title
+  to close it, click a window to bring it to the front, click a menu title
+  and then an item (View changes the wallpaper). After 30 seconds without
+  input the script takes over again, from a clean desktop. A moved window
+  costs two repaints a frame: the strips it uncovers (cleared, then the
+  windows below copied in, clipped) and the window at its new place, all
+  by DMA. Its program is longer than the others, so it moves the loader's
+  buffer (`LD_IN`) up to `$3800`; `lib/demo.inc` stops the link if a
+  program reaches `LD_IN`. `tests/fastload_check.py` reports XRAM
+  differences for it, because the demo writes its text into XRAM after
+  loading; stopped at `ld_done`, XRAM matches `desktop.reu`.
 - Not built: "Nothing breaks" (needs well-known games and demos;
   `tests/stock-compat.py` covers VICE's own VIC-II test programs meanwhile).

@@ -102,9 +102,10 @@ Step 6 (first part):
   from generated art through the PNG converter (`demos/`, `tools/`)
 - sprite hit masks (entry +7 bits 0-3), added when the bullet storm showed
   that shared group bits cannot keep bullets from colliding with each other
+- demo `desktop`: a GEOS-style desktop with windows drawn by the DMA blitter
+  from XRAM
 
-Next: "Nothing breaks" (needs well-known games and demos), a GEOS-style
-desktop demo (proposed in the spec), music for Big
+Next: "Nothing breaks" (needs well-known games and demos), music for Big
 world, and running the tests on FPGA simulation and hardware.
 
 ## Building the fork

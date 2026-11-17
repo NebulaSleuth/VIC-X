@@ -12,6 +12,7 @@ and coloured for the demos to OUTDIR, ready for png2vicx.py:
   ship.png            32x32, 24 colours, magenta keyed out
   space.png           320x200, 192 colours, dithered
   gallery0-3.png      320x200, 240 colours, dithered
+  desktop_photo.png   160x100, 160 colours, dithered (gallery1 again)
   parallax_*_wide.png 1024x272, the landscapes again at full-frame height
   bigworld.png        320 wide, the six world*.jpg stacked top to bottom with
                       48-row blends, 240 colours, dithered; bigworld.json
@@ -275,6 +276,8 @@ def main():
     save(preview, "sixteen_custom_preview.png")
     for i in range(4):
         save(quantise(fit(load(raw, f"gallery{i}.jpg"), 320, 200), 240, True), f"gallery{i}.png")
+    # the desktop demo's photo window
+    save(quantise(fit(load(raw, "gallery1.jpg"), 160, 100), 160, True), "desktop_photo.png")
 
 
 if __name__ == "__main__":

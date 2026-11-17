@@ -345,8 +345,13 @@ cpu_frames: .res 1
 ; match the demo's signature (an REU image loaded with the demo, or an
 ; earlier run), there is nothing to load.
 
+.ifndef LD_IN                   ; a demo whose program is longer can move it up
 LD_IN   = $3000                 ; packed block (up to ~8.2 KB)
+.endif
 LD_OUT  = $6000                 ; unpacked block (8 KB)
+.import __MAIN_LAST__           ; the end of the program (demo.cfg)
+.assert __MAIN_LAST__ <= LD_IN, lderror, "the program runs into LD_IN: set LD_IN higher"
+.assert LD_IN + $2100 <= LD_OUT, lderror, "LD_IN is too close to LD_OUT"
 ld_src  = $F0                   ; zero-page pointers
 ld_dst  = $F2
 ld_ref  = $F4

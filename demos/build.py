@@ -90,6 +90,13 @@ DEMOS = {
         ("STOCK", "sixteen_stock.bin"), ("CUSTOM", "sixteen_custom.bin"),
         ("CUSTOM_PAL", "sixteen_custom.pal"),
     ],
+    "desktop": [
+        ("DESK_TILES", "desktop.tiles"), ("DESK_MAP", "desktop.map"),
+        ("DESK_PAL", "desktop.pal"), ("PHOTO_PAL", "desktop_photo.pal"),
+        ("POINTER", "desktop_pointer.spr"),
+    ] + [(f"WIN{i}_IMG", f"desk_win{i}.img") for i in range(4)]
+      + [("NOTES_CLEAN", "desk_win0.img")]
+      + [(f"MENU{i}_{k}", f"desk_menu{i}{s}.img") for i in range(3) for k, s in (("IMG", ""), ("INV", "i"))],
 }
 
 WORLD_CAPTIONS = ["THE EDGE OF SPACE", "HIGH SKIES", "ABOVE THE CLOUDS",
@@ -125,6 +132,7 @@ def make_assets(prep):
         run([sys.executable, TOOLS / "prep_art.py", ART / "raw", ART])
     GEN.mkdir(parents=True, exist_ok=True)
     run([sys.executable, TOOLS / "gen_art.py", GEN], stdout=subprocess.DEVNULL)
+    run([sys.executable, TOOLS / "gen_desktop.py", ART, BUILD], stdout=subprocess.DEVNULL)
     for name, folder, args in CONVERSIONS:
         run([sys.executable, TOOLS / "png2vicx.py", folder / f"{name}.png", "-o", BUILD / name] + args)
 
