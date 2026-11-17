@@ -91,7 +91,7 @@ DEMOS = {
         ("CUSTOM_PAL", "sixteen_custom.pal"),
     ],
     "desktop": [
-        ("DESK_TILES", "desktop.tiles"), ("DESK_MAP", "desktop.map"),
+        ("DESK_IMG", "desktop.img"),
         ("DESK_PAL", "desktop.pal"), ("PHOTO_PAL", "desktop_photo.pal"),
         ("POINTER", "desktop_pointer.spr"),
     ] + [(f"WIN{i}_IMG", f"desk_win{i}.img") for i in range(4)]

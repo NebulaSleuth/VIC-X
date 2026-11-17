@@ -1,30 +1,33 @@
 ; desktop.s - Desktop: a GEOS-style windowing desktop.
 ;
-; Layer 1 is the desktop: an 8-bit tile layer with the wallpaper, the menu
-; bar and the icons.  The menu titles, the icon labels and the CPU readout
-; are VIC-II text (lower-case set, YSCROLL 5 so the text sits in the bar),
-; with the background transparent.  Layer 0, in front, is a 320x200 8-bit
-; bitmap holding the windows and menus; colour 0 is transparent, so where
-; nothing is open the desktop shows through.  The pointer is entry 0 of
-; the sprite engine.  Order, front to back: sprites, layer 0, VIC-II,
-; layer 1, so windows cover the icon labels.
+; Layer 0 is a 320x200 8-bit bitmap, double buffered ($00000 and $10000):
+; the desktop (wallpaper, menu bar, icons and their labels), the windows
+; and the menus are all drawn into the hidden buffer, which is shown at the
+; start of the next frame, so nothing half-drawn is ever on screen.  The
+; menu titles and the CPU readout are VIC-II text in front (lower-case set,
+; YSCROLL 5 so the text sits in the bar, background transparent).  The
+; pointer is entry 0 of the sprite engine.
 ;
-; Every window and menu is a picture in XRAM.  The demo draws them with
-; the DMA blitter: a 2D copy for the window, two fills for its shadow.  When
-; a window moves, only the strips it uncovers are repainted (cleared, then
-; every window below copied into them, clipped) and the window is copied
-; at its new place, so dragging moves about twice its size per frame.  The
-; text in the windows is written into those pictures by the CPU through
-; an XRAM window at $A000, from the character ROM: the titles at start-up,
-; the About box's numbers from the capability registers, and the notes,
-; typed a letter at a time.
+; The desktop, every window and every menu is a picture in XRAM, drawn by
+; the DMA blitter: 2D copies for the pictures, fills for the shadows and
+; the zoom outline.  A change (a window moved, opened, closed or raised, a
+; menu opened, a letter typed) marks a rectangle dirty in both buffers;
+; each frame the hidden buffer's dirty rectangle is redrawn - desktop, then
+; the windows from the back, clipped to it - and shown, and the other
+; buffer catches up the frame after.  The text in the pictures is written
+; by the CPU through an XRAM window at $A000, from the character ROM: the
+; titles and labels at start-up, the About box's numbers from the
+; capability registers, and the notes, typed a letter at a time.
 ;
 ; Controls: a 1351 mouse in either port, or a joystick in port 2; the left
-; button or fire clicks.  Double-click an icon to open its window, drag a
-; window by its title bar, click the box on the left of the title to close
-; it, click a window to bring it to the front, click a menu title and then
-; an item.  A test build (VICX_DEMO_DEFS=DESK_TEST) plays a script that
-; does all of it, for checking the demo in headless VICE.
+; button or fire clicks.  The buttons and the mouse are read all the time
+; (while the CPU waits for the frame or the blitter), so short clicks are
+; not missed and the mouse's 6-bit counters do not wrap between reads.
+; Double-click an icon to open its window, drag a window by its title bar,
+; click the box on the left of the title to close it, click a window to
+; bring it to the front, click a menu title and then an item.  A test build
+; (VICX_DEMO_DEFS=DESK_TEST) plays a script that does all of it, for
+; checking the demo in headless VICE.
 
 NEED_XRAM_MB = 2
 CPU_TEXT     = $0400 + 32           ; menu bar, right
@@ -33,10 +36,7 @@ LD_IN        = $3800                ; the loader's buffer, above this program
 .include "assets.inc"
 .include "desktop.inc"
 
-BMP_V   = $00000                    ; layer 0: 320x200 8-bit bitmap
-PTR_V   = $0FA00                    ; pointer pattern (16x16, 256 bytes)
-MAP_V   = $10000                    ; layer 1: desktop map, 64x32
-TILES_V = $11000                    ; desktop tiles
+PTR_V   = $0FA00                    ; pointer pattern (16x16), after buffer 0
 FONT    = $C000                     ; lower-case character set, from ROM
 WIN_SLOT = $A000                    ; XRAM window 0 for writing text
 
@@ -70,22 +70,22 @@ d_dst   = $30
 d_w     = $33
 d_h     = $35
 d_ss    = $36
-d_ds    = $37
-d_fill  = $39
-m_res   = $3A                       ; multiply result
-t0      = $3C
-t1      = $3D
-t2      = $3E
-t3      = $3F
-wptr    = $40                       ; pointer into the XRAM window
-tx_addr = $42                       ; text: XRAM address, stride, colours
-tx_stride = $45
-tx_fg   = $46
-tx_bg   = $47
-fptr    = $48                       ; font row
-tptr    = $4A                       ; texts table / strings
-sc_pc   = $4C                       ; script
-num     = $4E                       ; 16-bit number to print
+d_ds    = $38
+d_fill  = $3A
+m_res   = $3B                       ; multiply result
+t0      = $3D
+t1      = $3E
+t2      = $3F
+t3      = $40
+wptr    = $41                       ; pointer into the XRAM window
+tx_addr = $43                       ; text: XRAM address, stride, colours
+tx_stride = $46
+tx_fg   = $48
+tx_bg   = $49
+fptr    = $4A                       ; font row
+tptr    = $4C                       ; texts table / strings
+sc_pc   = $4E                       ; script
+num     = $50                       ; 16-bit number to print
 
 .macro MOVW src, dst
         lda src
@@ -135,7 +135,7 @@ main:
         lda #$37
         sta $01
 
-        ; the menu bar and the icon labels as text
+        ; the menu bar as text, the rest of the screen blank
         ldx #0
 :       lda #$20
         sta $0400,x
@@ -154,59 +154,19 @@ main:
         sta $0400,x
         dex
         bpl :-
-        lda #<labels
-        sta tptr
-        lda #>labels
-        sta tptr + 1
-@lab:   ldy #0
-        lda (tptr),y
-        sta wptr
-        iny
-        lda (tptr),y
-        beq @labdone
-        sta wptr + 1
-        lda tptr
-        clc
-        adc #2
-        sta tptr
-        bcc :+
-        inc tptr + 1
-:       ldy #0
-:       lda (tptr),y
-        beq :+
-        sta (wptr),y
-        iny
-        bne :-
-:       iny                             ; past the 0
-        tya
-        clc
-        adc tptr
-        sta tptr
-        bcc @lab
-        inc tptr + 1
-        bne @lab
-@labdone:
 
-        ; VRAM: desktop, pointer, palette; layer 0 cleared
-        XRAM_TO_VRAM DESK_TILES, TILES_V, DESK_TILES_LEN
-        XRAM_TO_VRAM DESK_MAP, MAP_V, DESK_MAP_LEN
         XRAM_TO_VRAM POINTER, PTR_V, POINTER_LEN
         XRAM_TO_VRAM DESK_PAL, VICX_PALETTE + 16 * 4, DESK_PAL_LEN
         XRAM_TO_VRAM PHOTO_PAL, VICX_PALETTE + 96 * 4, PHOTO_PAL_LEN
-        DMA_DESC 0, VICX_DMA_FILL, VICX_DMA_DST_VRAM, 0, BMP_V, 64000, 0, 0, 0, 0, 0, VICX_DMA_NONE
-        lda #0
-        sta VICX_DMA_CMD
-        DMA_WAIT
 
-        ; the text in the windows and menus
+        ; the text in the desktop, the windows and the menus
         lda #VICX_SLOT_A000 | VICX_SLOT_ON
         sta VICX_W0_SLOT
         jsr render_texts
 
-        LAYER_SET VICX_LAYER1, VICX_LMODE_TILE8, VICX_MAP_W64 | VICX_MAP_H32, MAP_V, TILES_V, 0, 0, 0, 0
-        LAYER_SET VICX_LAYER0, VICX_LMODE_BITMAP8, 0, BMP_V, 0, 0, 0, 320, 0
+        LAYER_SET VICX_LAYER0, VICX_LMODE_BITMAP8, 0, $00000, 0, 0, 0, 320, 0
         VICX_P0_SET VICX_ORDER, VICX_STEP_0
-        lda #(3 << VICX_ORDER_SPR) | (2 << VICX_ORDER_L0) | (1 << VICX_ORDER_VIC)
+        lda #(3 << VICX_ORDER_SPR) | (2 << VICX_ORDER_VIC) | (1 << VICX_ORDER_L0)
         sta VICX_P0_DATA
         SPRITE 0, 160, 100, VICX_SW_16 | VICX_SH_16, VICX_S_ON, PTR_V, VICX_S_8BIT
 
@@ -214,7 +174,7 @@ main:
         ; either port); a selection needs a while before the SID has read it
         lda #$C0
         sta $DC02
-        lda #$80                        ; port 2
+        lda #$BF                        ; port 2
         sta $DC00
         ldx #100
         jsr wait_line
@@ -224,7 +184,7 @@ main:
         sta opotx + 1
         lda $D41A
         sta opoty + 1
-        lda #$40                        ; port 1
+        lda #$7F                        ; port 1
         sta $DC00
         ldx #100
         jsr wait_line
@@ -236,6 +196,11 @@ main:
         sta opoty
         lda #0
         sta psel
+        sta acc_x
+        sta acc_x + 1
+        sta acc_y
+        sta acc_y + 1
+        sta btn_latch
         lda #$FF
         sta mport                       ; no mouse seen yet
 
@@ -250,6 +215,8 @@ main:
         sta btn_prev
         sta in_btn
         sta jspeed
+        sta zoom_on
+        sta flip
         lda #$FF
         sta menu_open
         jsr reset_desktop
@@ -259,18 +226,42 @@ main:
         jsr start_script
 .endif
 
+        ; both buffers whole, buffer 0 shown
+        lda #1
+        sta back
+        jsr set_screen
+        jsr repaint
+        lda #0
+        sta back
+        jsr repaint
+        lda #1
+        sta back
+        sta dre
+        sta dre + 1
+
         lda #$17                        ; screen $0400, lower-case set
         sta $D018
         lda #$1D                        ; screen on, YSCROLL 5
         sta $D011
-        lda #VICX_CTRL_SPR | VICX_CTRL_L0 | VICX_CTRL_L1 | VICX_CTRL_BGTRANS
+        lda #VICX_CTRL_SPR | VICX_CTRL_L0 | VICX_CTRL_BGTRANS
         sta VICX_CTRL
 
 ; --- the frame loop -------------------------------------------------------
 loop:
-        ldx #251
-        jsr wait_line
-        jsr cpu_start
+        jsr wait_frame
+        lda flip                        ; show what was drawn last frame
+        beq :+
+        VICX_P0_SET VICX_LAYER0 + VICX_L_BASE, VICX_STEP_1
+        lda #0
+        sta VICX_P0_DATA
+        sta VICX_P0_DATA
+        lda back
+        sta VICX_P0_DATA                ; $00000 or $10000
+        eor #1
+        sta back
+        lda #0
+        sta flip
+:       jsr cpu_start
         inc frame
         jsr read_input
 .ifdef DESK_TEST
@@ -280,37 +271,185 @@ loop:
 :
 .endif
         jsr place_pointer
+        jsr zoom_step
         jsr ui_step
         jsr type_step
         jsr rainbow_step
+        jsr paint
         jsr cpu_end
         jmp loop
 
+; Wait for raster lines 251-255 (below the display window), reading the
+; input meanwhile.
+wait_frame:
+:       jsr poll
+        jsr at_line
+        bcs :-                          ; still there from last time
+:       jsr poll
+        jsr at_line
+        bcc :-
+        rts
+
+at_line:
+        lda $D011
+        bmi :+
+        lda $D012
+        cmp #251
+        rts
+:       clc
+        rts
+
+; Draw the hidden buffer's dirty rectangle, to be shown next frame.
+paint:  ldx back
+        lda dre,x
+        bne @rts
+        lda drx1l,x
+        sta r_x1
+        lda drx1h,x
+        sta r_x1 + 1
+        lda dry1,x
+        sta r_y1
+        lda drx2l,x
+        sta r_x2
+        lda drx2h,x
+        sta r_x2 + 1
+        lda dry2,x
+        sta r_y2
+        lda #1
+        sta dre,x
+        sta flip
+        jmp repaint
+@rts:   rts
+
+; Mark r dirty in both buffers.
+add_dirty:
+        ldx #1
+@buf:   lda dre,x
+        beq @union
+        lda r_x1
+        sta drx1l,x
+        lda r_x1 + 1
+        sta drx1h,x
+        lda r_y1
+        sta dry1,x
+        lda r_x2
+        sta drx2l,x
+        lda r_x2 + 1
+        sta drx2h,x
+        lda r_y2
+        sta dry2,x
+        lda #0
+        sta dre,x
+        beq @next
+@union: lda r_x1                        ; x1 = min
+        cmp drx1l,x
+        lda r_x1 + 1
+        sbc drx1h,x
+        bcs :+
+        lda r_x1
+        sta drx1l,x
+        lda r_x1 + 1
+        sta drx1h,x
+:       lda r_y1                        ; y1 = min
+        cmp dry1,x
+        bcs :+
+        sta dry1,x
+:       lda drx2l,x                     ; x2 = max
+        cmp r_x2
+        lda drx2h,x
+        sbc r_x2 + 1
+        bcs :+
+        lda r_x2
+        sta drx2l,x
+        lda r_x2 + 1
+        sta drx2h,x
+:       lda r_y2                        ; y2 = max
+        cmp dry2,x
+        bcc @next
+        sta dry2,x
+@next:  dex
+        bpl @buf
+        rts
+
 ; --- input ----------------------------------------------------------------
-; Joystick 2 and the mouse move (px, py); in_btn = a button is down.  Until
-; a mouse has moved, the SID reads port 1's and port 2's paddle lines in
-; turns, a frame each; the first that moves is the mouse's port from then on.
+; Read the buttons, and the mouse once its port is known; keeps X and Y.
+; A button down at any read counts as a click for the next frame; the
+; mouse's movement adds up in acc_x and acc_y.
+poll:   txa
+        pha
+        tya
+        pha
+        lda $DC00                       ; fire / left button on either port
+        and $DC01
+        and #$10
+        bne :+
+        lda #1
+        sta btn_latch
+:       lda mport
+        bmi @done
+        jsr mouse_read
+        lda mdx
+        clc
+        adc acc_x
+        sta acc_x
+        lda mdxs
+        adc acc_x + 1
+        sta acc_x + 1
+        lda mdy
+        clc
+        adc acc_y
+        sta acc_y
+        lda mdys
+        adc acc_y + 1
+        sta acc_y + 1
+@done:  pla
+        tay
+        pla
+        tax
+        rts
+
+; The movement since the last read of port psel's paddle lines -> mdx/mdxs,
+; mdy/mdys (signed, 1351 counts)
+mouse_read:
+        ldx psel
+        ldy opotx,x
+        lda $D419
+        jsr movchk
+        sta mdx
+        stx mdxs
+        tya
+        ldx psel
+        sta opotx,x
+        ldy opoty,x
+        lda $D41A
+        jsr movchk
+        sta mdy
+        stx mdys
+        tya
+        ldx psel
+        sta opoty,x
+        rts
+
+; Once a frame: joystick 2 and the mouse move (px, py); in_btn = a button
+; was down since the last frame.  Until a mouse has moved, the SID reads
+; port 1's and port 2's paddle lines in turns, a frame each; the first that
+; moves is the mouse's port from then on.
 read_input:
+        jsr poll
         lda #0
         sta active
-        sta t1                          ; a button is down
         lda $DC00
         eor #$FF
         and #$1F
         sta t2                          ; joystick 2
         lda $DC01
         eor #$FF
-        and #$11                        ; mouse buttons: fire = left, up = right
-        sta t3
+        and #$11                        ; mouse buttons
         ora t2
+        ora btn_latch
         beq :+
         inc active
-:       lda t2
-        ora t3
-        and #$10                        ; fire on either port (left button) clicks
-        beq :+
-        inc t1
-:       ; joystick directions, speeding up while held
+:       ; joystick directions, faster while held
         lda t2
         and #$0F
         bne :+
@@ -364,56 +503,76 @@ read_input:
         sta px
         bcc @mouse
         inc px + 1
-@mouse: ldx psel
-        ldy opotx,x
-        lda $D419
-        jsr movchk
-        sta mdx
-        stx mdxs
-        tya
-        ldx psel
-        sta opotx,x
-        ldy opoty,x
-        lda $D41A
-        jsr movchk
-        sta mdy
-        stx mdys
-        tya
-        ldx psel
-        sta opoty,x
-        lda #0
-        sta pyh
+@mouse: lda mport
+        bpl @move
+        jsr mouse_read                  ; no mouse yet: did this port move?
         lda mdx
         ora mdy
-        beq @still
-        lda mport                       ; the first port that moves is the mouse's
-        bpl :+
+        beq @other
         lda psel
         sta mport
-:       inc active
-        lda mdx                         ; px += dx
+        lda mdx
+        sta acc_x
+        lda mdxs
+        sta acc_x + 1
+        lda mdy
+        sta acc_y
+        lda mdys
+        sta acc_y + 1
+        jmp @move
+@other: lda psel
+        eor #1
+        sta psel
+        tax
+        lda port_sel,x
+        sta $DC00
+@move:  ; half the mouse's counts move the pointer; the rest waits
+        lda acc_x
+        ora acc_x + 1
+        ora acc_y
+        ora acc_y + 1
+        beq @noacc
+        inc active
+@noacc: lda acc_x + 1                   ; dx = acc_x / 2 (floor)
+        cmp #$80
+        ror
+        sta mdxs
+        lda acc_x
+        ror
+        sta mdx
+        lda acc_x
+        and #1
+        sta acc_x
+        lda #0
+        sta acc_x + 1
+        lda mdx
         clc
         adc px
         sta px
         lda mdxs
         adc px + 1
         sta px + 1
-        lda py                          ; (py, pyh) -= dy
+        lda acc_y + 1                   ; dy = acc_y / 2; py -= dy
+        cmp #$80
+        ror
+        sta mdys
+        lda acc_y
+        ror
+        sta mdy
+        lda acc_y
+        and #1
+        sta acc_y
+        lda #0
+        sta acc_y + 1
+        lda py
         sec
         sbc mdy
         sta py
         lda #0
         sbc mdys
         sta pyh
-@still: lda mport
-        bpl @clamp
-        lda psel                        ; no mouse yet: the other port next
-        eor #1
-        sta psel
-        tax
-        lda port_sel,x
-        sta $DC00
-@clamp: lda px + 1                      ; px: 0-319
+        ; px: 0-319
+        lda px + 1
         bpl :+
         lda #0
         sta px
@@ -441,30 +600,32 @@ read_input:
         lda attract                     ; test build: the script has the button
         beq :+                          ; until something moves
         lda active
-        beq @rts
+        beq @latch
         lda #0
         sta attract
 :
 .endif
-        lda t1
+        lda btn_latch
         sta in_btn
-@rts:   rts
+@latch: lda #0
+        sta btn_latch
+        rts
 
-port_sel: .byte $40, $80                ; $DC00: port 1's or port 2's paddle lines
+port_sel: .byte $7F, $BF                ; $DC00: port 1's or port 2's paddle lines
 
 ; 1351: A = new pot value, Y = old -> A = signed movement, X = sign,
 ; Y = value to keep (the old one when there was no movement)
-movchk: sty t0
-        sta t1
+movchk: sty mv0
+        sta mv1
         ldx #0
         sec
-        sbc t0
+        sbc mv0
         and #%01111111
         cmp #%01000000
         bcs @neg
         lsr
         beq @null
-        ldy t1
+        ldy mv1
         rts
 @neg:   ora #%11000000
         cmp #$FF
@@ -472,7 +633,7 @@ movchk: sty t0
         sec
         ror
         ldx #$FF
-        ldy t1
+        ldy mv1
         rts
 @null:  lda #0
         ldx #0
@@ -798,13 +959,11 @@ ui_menu:
         cmp menu_hl
         beq :+
         pha
-        lda menu_hl
-        ldx #0                          ; normal picture
-        jsr draw_item
+        lda menu_hl                     ; the old item and the new one again
+        jsr dirty_item
         pla
         sta menu_hl
-        ldx #1                          ; highlighted
-        jsr draw_item
+        jsr dirty_item
 :       lda released
         beq @press
         lda menu_hl
@@ -904,7 +1063,7 @@ window_at:
 @no:    lda #$FF
         rts
 
-; icon under the pointer -> A (its action) and hit_icon, or $FF
+; icon under the pointer -> A and hit_icon, or $FF
 icon_at:
         ldx #0
 @lp:    lda py
@@ -966,7 +1125,7 @@ item_at:
 @no:    lda #$FF
         rts
 
-; --- drawing -----------------------------------------------------------------
+; --- drawing (into the hidden buffer) ------------------------------------------
 ; Intersect a with r into i; carry set if empty.
 intersect:
         CMPW a_x1, r_x1
@@ -999,7 +1158,7 @@ intersect:
 @empty: sec
         rts
 
-; Write descriptor 0 from d_* and run it.
+; Write descriptor 0 from d_* and run it, reading the input while it runs.
 dma_go:
         VICX_P0_SET VICX_DMADESC, VICX_STEP_1
         lda d_op
@@ -1032,7 +1191,7 @@ dma_go:
         sta VICX_P0_DATA
         lda d_ss
         sta VICX_P0_DATA
-        lda #0
+        lda d_ss + 1
         sta VICX_P0_DATA
         lda d_ds
         sta VICX_P0_DATA
@@ -1046,16 +1205,47 @@ dma_go:
         sta VICX_P0_DATA
         lda #0
         sta VICX_DMA_CMD
-        DMA_WAIT
+:       jsr poll
+        lda VICX_DMA_CMD
+        bmi :-
         rts
 
-; Fill rectangle i of the bitmap with A.
+; Fill rectangle i of the hidden buffer with A.
 fill_i: sta d_fill
         lda #VICX_DMA_FILL
         sta d_op
         lda #VICX_DMA_DST_VRAM | VICX_DMA_2D
         sta d_flags
         jmp blit
+
+; Copy rectangle i from the desktop picture.
+copy_desk:
+        ldx i_y1
+        lda row_lo,x
+        clc
+        adc i_x1
+        sta d_src
+        lda row_hi,x
+        adc i_x1 + 1
+        sta d_src + 1
+        lda #0
+        adc #0
+        sta d_src + 2
+        lda d_src
+        clc
+        adc #<DESK_IMG
+        sta d_src
+        lda d_src + 1
+        adc #>DESK_IMG
+        sta d_src + 1
+        lda d_src + 2
+        adc #^DESK_IMG
+        sta d_src + 2
+        lda #<320
+        sta d_ss
+        lda #>320
+        sta d_ss + 1
+        jmp copy_go
 
 ; Copy rectangle i from the object's picture.
 copy_i: lda i_y1
@@ -1084,6 +1274,9 @@ copy_i: lda i_y1
         sta d_src + 2
         lda o_w
         sta d_ss
+        lda #0
+        sta d_ss + 1
+copy_go:
         lda #VICX_DMA_COPY
         sta d_op
         lda #VICX_DMA_SRC_XRAM | VICX_DMA_DST_VRAM | VICX_DMA_2D
@@ -1096,7 +1289,7 @@ blit:   ldx i_y1
         lda row_hi,x
         adc i_x1 + 1
         sta d_dst + 1
-        lda #0
+        lda back                        ; buffer 1 is $10000 up
         sta d_dst + 2
         lda i_x2
         sec
@@ -1249,69 +1442,22 @@ r_from_obj:
         sta r_y2
         rts
 
-; Repaint r: clear it, then every window bottom to top and the open menu.
-repaint:
-        MOVW r_x1, i_x1
-        MOVW r_x2, i_x2
-        lda r_y1
-        sta i_y1
-        lda r_y2
-        sta i_y2
-        CMPW i_x1, i_x2
-        bcs @rts
-        lda i_y1
-        cmp i_y2
-        bcs @rts
-        lda #0
-        jsr fill_i
-        lda #0
-        jmp repaint_from
-@rts:   rts
-
-; Draw the windows from z position A up, and the open menu, clipped to r.
-repaint_from:
-        sta zk
-@lp:    lda zk
-        cmp zcount
-        bcs @menu
-        tax
-        lda zlist,x
-        tax
-        jsr load_win
-        jsr draw_obj
-        inc zk
-        bne @lp
-@menu:  ldx menu_open
-        bmi @rts
-        jsr load_menu
-        jsr draw_obj
-@rts:   rts
-
-; Copy menu item A (if not $FF) from the normal (X = 0) or highlighted
-; (X = 1) picture.
-draw_item:
-        cmp #$FF
-        beq @rts
-        sta t2
-        stx t3
+; r = menu item A of the open menu (inside its border)
+item_r: sta t2
         ldx menu_open
-        jsr load_menu
-        lda t3
-        beq :+
-        lda menu_inv_lo,x
-        sta o_img
-        lda menu_inv_mid,x
-        sta o_img + 1
-        lda menu_inv_hi,x
-        sta o_img + 2
-:       lda #0
-        sta o_shadow
-        lda #1                          ; r = the item, inside the border
-        ADDW8 o_x, r_x1
-        lda o_w
+        lda menu_x,x
+        clc
+        adc #1
+        sta r_x1
+        lda menu_x,x
+        clc
+        adc menu_w,x
         sec
         sbc #1
-        ADDW8 o_x, r_x2
+        sta r_x2
+        lda #0
+        sta r_x1 + 1
+        sta r_x2 + 1
         lda t2
         ldx #ITEM_H
         jsr mul8
@@ -1322,147 +1468,134 @@ draw_item:
         clc
         adc #ITEM_H
         sta r_y2
+        rts
+
+; Mark menu item A dirty (nothing for $FF).
+dirty_item:
+        cmp #$FF
+        beq :+
+        jsr item_r
+        jmp add_dirty
+:       rts
+
+; Redraw r in the hidden buffer: the desktop, the windows from the back,
+; the zoom outline, the open menu and its highlighted item.
+repaint:
+        MOVW r_x1, i_x1
+        MOVW r_x2, i_x2
+        lda r_y1
+        sta i_y1
+        lda r_y2
+        sta i_y2
+        jsr copy_desk
+        lda #0
+        sta zk
+@lp:    lda zk
+        cmp zcount
+        bcs @zoom
+        tax
+        lda zlist,x
+        tax
+        jsr load_win
+        jsr draw_obj
+        inc zk
+        bne @lp
+@zoom:  lda zoom_on
+        beq @menu
+        jsr draw_outline
+@menu:  ldx menu_open
+        bmi @rts
+        jsr load_menu
+        jsr draw_obj
+        lda menu_hl
+        bmi @rts
+        MOVW r_x1, a_x1                 ; r = r and the item
+        MOVW r_x2, a_x2
+        lda r_y1
+        sta a_y1
+        lda r_y2
+        sta a_y2
+        lda menu_hl
+        jsr item_r
+        jsr intersect
+        bcs @rts
+        MOVW i_x1, r_x1
+        MOVW i_x2, r_x2
+        lda i_y1
+        sta r_y1
+        lda i_y2
+        sta r_y2
+        ldx menu_open
+        jsr load_menu
+        lda menu_inv_lo,x
+        sta o_img
+        lda menu_inv_mid,x
+        sta o_img + 1
+        lda menu_inv_hi,x
+        sta o_img + 2
+        lda #0
+        sta o_shadow
         jmp draw_obj
 @rts:   rts
 
+; The sides of the zoom rectangle zr_*, clipped to r.
+draw_outline:
+        MOVW zr_x1, a_x1                ; top
+        MOVW zr_x2, a_x2
+        lda zr_y1
+        sta a_y1
+        clc
+        adc #1
+        sta a_y2
+        jsr @side
+        lda zr_y2                       ; bottom
+        sta a_y2
+        sec
+        sbc #1
+        sta a_y1
+        jsr @side
+        lda zr_y1                       ; left
+        sta a_y1
+        lda zr_y2
+        sta a_y2
+        lda #1
+        ADDW8 zr_x1, a_x2
+        jsr @side
+        MOVW zr_x2, a_x2                ; right
+        lda zr_x2
+        sec
+        sbc #1
+        sta a_x1
+        lda zr_x2 + 1
+        sbc #0
+        sta a_x1 + 1
+@side:  jsr intersect
+        bcs :+
+        lda #BLACK
+        jmp fill_i
+:       rts
+
 ; --- windows -------------------------------------------------------------------
-; Move window X (the top one) to (nx, ny).
+; Move window X to (nx, ny).
 move_win:
         stx mv_win
         jsr load_win
-        MOVW o_x, fa_x1                 ; old footprint
-        lda o_y
-        sta fa_y1
-        lda o_w
-        clc
-        adc #SH
-        sta t2
-        ADDW8 o_x, fa_x2
-        lda o_y
-        clc
-        adc o_h
-        adc #SH
-        sta fa_y2
-        ldx mv_win                      ; new place and footprint
+        jsr r_from_obj                  ; where it was
+        jsr add_dirty
+        ldx mv_win
         lda nx
         sta win_x_lo,x
-        sta fb_x1
         lda nx + 1
         sta win_x_hi,x
-        sta fb_x1 + 1
         lda ny
         sta win_y,x
-        sta fb_y1
-        lda t2
-        ADDW8 fb_x1, fb_x2
-        lda ny
-        clc
-        adc o_h
-        adc #SH
-        sta fb_y2
-        ; the strips of the old footprint outside the new one
-        lda fb_y1                       ; top: fa_y1 .. min(fb_y1, fa_y2)
-        cmp fa_y1
-        beq @nobtop
-        bcc @nobtop
-        cmp fa_y2
-        bcc :+
-        lda fa_y2
-:       sta r_y2
-        lda fa_y1
-        sta r_y1
-        MOVW fa_x1, r_x1
-        MOVW fa_x2, r_x2
-        jsr repaint
-@nobtop:
-        lda fb_y2                       ; bottom: max(fb_y2, fa_y1) .. fa_y2
-        cmp fa_y2
-        bcs @nobot
-        cmp fa_y1
-        bcs :+
-        lda fa_y1
-:       sta r_y1
-        lda fa_y2
-        sta r_y2
-        MOVW fa_x1, r_x1
-        MOVW fa_x2, r_x2
-        jsr repaint
-@nobot: lda fa_y1                       ; middle rows: max(y1) .. min(y2)
-        cmp fb_y1
-        bcs :+
-        lda fb_y1
-:       sta my1
-        lda fa_y2
-        cmp fb_y2
-        bcc :+
-        lda fb_y2
-:       sta my2
-        lda my1
-        cmp my2
-        bcc @mid
-        jmp @nomid
-@mid:
-        ; left: fa_x1 .. min(fb_x1, fa_x2)
-        CMPW fa_x1, fb_x1
-        bcs @noleft
-        MOVW fa_x1, r_x1
-        CMPW fb_x1, fa_x2
-        bcc :+
-        MOVW fa_x2, r_x2
-        jmp :++
-:       MOVW fb_x1, r_x2
-:       lda my1
-        sta r_y1
-        lda my2
-        sta r_y2
-        jsr repaint
-@noleft:                                ; right: max(fb_x2, fa_x1) .. fa_x2
-        CMPW fb_x2, fa_x2
-        bcs @nomid
-        MOVW fa_x2, r_x2
-        CMPW fb_x2, fa_x1
-        bcs :+
-        MOVW fa_x1, r_x1
-        jmp :++
-:       MOVW fb_x2, r_x1
-:       lda my1
-        sta r_y1
-        lda my2
-        sta r_y2
-        jsr repaint
-@nomid: ; the window at its new place
-        jsr set_screen
-        ldx mv_win
-        jsr load_win
-        jsr draw_obj
-        ; the shadow's two notches show what is below
-        ldx mv_win
-        jmp repaint_notches
+        jmp dirty_win                   ; where it is
 
-; Repaint the corners beside window X's shadow: top right and bottom left.
-repaint_notches:
+; Mark window X's footprint dirty.
+dirty_win:
         jsr load_win
-        lda o_w
-        ADDW8 o_x, r_x1
-        lda #SH
-        ADDW8 r_x1, r_x2
-        lda o_y
-        sta r_y1
-        clc
-        adc #SH
-        sta r_y2
-        jsr repaint
-        MOVW o_x, r_x1
-        lda #SH
-        ADDW8 o_x, r_x2
-        lda o_y
-        clc
-        adc o_h
-        sta r_y1
-        clc
-        adc #SH
-        sta r_y2
-        jmp repaint
+        jsr r_from_obj
+        jmp add_dirty
 
 ; Bring window X to the front.
 raise_win:
@@ -1476,11 +1609,7 @@ raise_win:
         txa
         sta zlist,y
         inc zcount
-        stx t3
-        jsr set_screen
-        ldx t3
-        jsr load_win
-        jmp draw_obj
+        jmp dirty_win
 @rts:   rts
 
 ; Take window X out of the order (X kept).
@@ -1507,9 +1636,7 @@ close_win:
         lda #0
         sta win_open,x
         jsr z_remove
-        jsr load_win
-        jsr r_from_obj
-        jmp repaint
+        jmp dirty_win
 @rts:   rts
 
 close_all:
@@ -1520,15 +1647,17 @@ close_all:
         dex
         bpl :-
         jsr set_screen
-        jmp repaint
+        jmp add_dirty
 
-; Open window X at its first place, zooming out from its icon; if it is
-; open already, bring it to the front.
+; Open window X at its first place, zooming out from its icon over 8
+; frames; if it is open already, bring it to the front.
 open_win:
         lda win_open,x
         beq :+
         jmp raise_win
-:       stx mv_win
+:       lda zoom_on                     ; one at a time
+        bne @rts
+        stx zoom_win
         lda win_x0_lo,x
         sta win_x_lo,x
         lda win_x0_hi,x
@@ -1547,38 +1676,36 @@ open_win:
         sta zoom_i
         lda #8
         sta zoom_n
-@step:  jsr zoom_rect
-        lda #BLACK
-        jsr outline
-        lda zoom_i
-        pha
-        lda zoom_n
-        pha
-        jsr frame_wait
-        pla
-        sta zoom_n
-        pla
-        sta zoom_i
+        lda #1
+        sta zoom_on
         jsr zoom_rect
-        lda #$FF                        ; erase: repaint the four sides
-        jsr outline
+        jmp dirty_zoom
+@rts:   rts
+
+; Once a frame: the next zoom rectangle, and the window at the end.
+zoom_step:
+        lda zoom_on
+        beq @rts
+        jsr dirty_zoom                  ; the old one goes
         lda zoom_i
         clc
         adc #6
         sta zoom_i
         dec zoom_n
-        bne @step
-        ldx mv_win
+        beq @open
+        jsr zoom_rect
+        jmp dirty_zoom
+@open:  lda #0
+        sta zoom_on
+        ldx zoom_win
         lda #1
         sta win_open,x
         ldy zcount
         txa
         sta zlist,y
         inc zcount
-        jsr set_screen
-        ldx mv_win
-        jsr load_win
-        jmp draw_obj
+        jmp dirty_win
+@rts:   rts
 
 ; zoom rectangle at zoom_i -> zr_*
 zoom_rect:
@@ -1597,68 +1724,14 @@ zoom_rect:
         sta zr_y2
         rts
 
-; Draw the sides of zr_* in colour A, or repaint them if A = $FF.
-outline:
-        sta t3
-        jsr ol_x                        ; top
+dirty_zoom:
+        MOVW zr_x1, r_x1
+        MOVW zr_x2, r_x2
         lda zr_y1
-        sta i_y1
-        clc
-        adc #1
-        sta i_y2
-        jsr side
-        jsr ol_x                        ; bottom
-        lda zr_y2
-        sta i_y2
-        sec
-        sbc #1
-        sta i_y1
-        jsr side
-        MOVW zr_x1, i_x1                ; left
-        lda #1
-        ADDW8 zr_x1, i_x2
-        jsr ol_y
-        jsr side
-        MOVW zr_x2, i_x2                ; right
-        lda zr_x2
-        sec
-        sbc #1
-        sta i_x1
-        lda zr_x2 + 1
-        sbc #0
-        sta i_x1 + 1
-        jsr ol_y
-side:   lda t3
-        cmp #$FF
-        beq :+
-        jmp fill_i
-:       MOVW i_x1, r_x1
-        MOVW i_x2, r_x2
-        lda i_y1
         sta r_y1
-        lda i_y2
-        sta r_y2
-        jmp repaint
-
-ol_x:   MOVW zr_x1, i_x1
-        MOVW zr_x2, i_x2
-        rts
-
-ol_y:   lda zr_y1
-        sta i_y1
         lda zr_y2
-        sta i_y2
-        rts
-
-; wait for the next frame's line 251, keeping the pointer and the CPU
-; readout going
-frame_wait:
-        jsr cpu_end
-        ldx #251
-        jsr wait_line
-        jsr cpu_start
-        inc frame
-        rts
+        sta r_y2
+        jmp add_dirty
 
 ; --- menus -----------------------------------------------------------------------
 open_menu:
@@ -1666,10 +1739,10 @@ open_menu:
         lda #$FF
         sta menu_hl
         jsr title_reverse
-        jsr set_screen
         ldx menu_open
         jsr load_menu
-        jmp draw_obj
+        jsr r_from_obj
+        jmp add_dirty
 
 close_menu:
         jsr title_reverse
@@ -1678,7 +1751,7 @@ close_menu:
         jsr r_from_obj
         lda #$FF
         sta menu_open
-        jmp repaint
+        jmp add_dirty
 
 ; Flip the reverse bit of the open menu's title in the bar.
 title_reverse:
@@ -1706,6 +1779,7 @@ reset_desktop:
         sta state
         sta in_btn
         sta btn_prev
+        sta zoom_on
         jsr close_all
         lda #0
         jsr set_wallpaper
@@ -1783,6 +1857,7 @@ notes_reset:
         lda #0
         sta d_h
         sta d_ss
+        sta d_ss + 1
         sta d_ds
         sta d_ds + 1
         jsr dma_go
@@ -1812,7 +1887,8 @@ type_step:
         dec n_wait
         bne @rts
         jsr notes_reset                 ; start again
-        jmp notes_show
+        ldx #0
+        jmp dirty_win
 @type:  ldy n_pos
         lda notes_text,y
         bne :+
@@ -1824,14 +1900,14 @@ type_step:
         beq @newline
         ldx #INK_COL
         jsr notes_cell
-        jsr notes_show_cell
+        jsr dirty_cell
         inc n_col
         jmp @cursor
 @newline:
         lda #32                         ; the cursor's cell blank
         ldx #INK_COL
         jsr notes_cell
-        jsr notes_show_cell
+        jsr dirty_cell
         lda #0
         sta n_col
         inc n_row
@@ -1842,7 +1918,7 @@ type_step:
         lda #160
         ldx #CURSOR_COL
         jsr notes_cell
-        jmp notes_show_cell
+        jmp dirty_cell
 
 ; Write screen code A in colour X at the cursor cell of the notes picture.
 notes_cell:
@@ -1852,6 +1928,8 @@ notes_cell:
         sta tx_bg
         lda #NOTES_W
         sta tx_stride
+        lda #0
+        sta tx_stride + 1
         lda n_row
         ldx #NLINE
         jsr mul8
@@ -1885,8 +1963,8 @@ notes_cell:
         pla
         jmp glyph
 
-; Show the cursor cell on screen (the notes window and any above it).
-notes_show_cell:
+; Mark the cursor cell of the notes window dirty.
+dirty_cell:
         ldx #0
         jsr load_win
         lda n_col
@@ -1909,23 +1987,7 @@ notes_show_cell:
         clc
         adc #8
         sta r_y2
-        jmp notes_from
-
-; Show the whole notes window (after a reset).
-notes_show:
-        ldx #0
-        jsr load_win
-        jsr set_screen
-notes_from:
-        ldy #0                          ; from the notes' place in the order
-:       lda zlist,y
-        beq :+
-        iny
-        cpy zcount
-        bne :-
-        rts
-:       tya
-        jmp repaint_from
+        jmp add_dirty
 
 ; --- text --------------------------------------------------------------------------
 ; Write the texts table into the pictures in XRAM.
@@ -1953,11 +2015,14 @@ render_texts:
         sta tx_stride
         iny
         lda (tptr),y
+        sta tx_stride + 1
+        iny
+        lda (tptr),y
         sta tx_fg
         iny
         lda (tptr),y
         sta tx_bg
-        lda #7
+        lda #8
         jsr tadv
         lda t3
         cmp #2
@@ -2143,9 +2208,10 @@ glyph:  ldx #0
         clc
         adc tx_stride
         sta g_addr
+        lda g_addr + 1
+        adc tx_stride + 1
+        sta g_addr + 1
         bcc :+
-        inc g_addr + 1
-        bne :+
         inc g_addr + 2
 :       dec g_rows
         beq :+
@@ -2162,9 +2228,11 @@ next_page:
 .bss
 px:         .res 2
 py:         .res 1
+pyh:        .res 1
 frame:      .res 1
 in_btn:     .res 1
 btn_prev:   .res 1
+btn_latch:  .res 1
 pressed:    .res 1
 released:   .res 1
 active:     .res 1
@@ -2178,6 +2246,10 @@ mdx:        .res 1
 mdxs:       .res 1
 mdy:        .res 1
 mdys:       .res 1
+mv0:        .res 1
+mv1:        .res 1
+acc_x:      .res 2                  ; mouse counts not yet moved
+acc_y:      .res 2
 sc_wait:    .res 1
 state:      .res 1
 hit_win:    .res 1
@@ -2190,16 +2262,6 @@ drag_dy:    .res 1
 nx:         .res 2
 ny:         .res 1
 mv_win:     .res 1
-fa_x1:      .res 2
-fa_y1:      .res 1
-fa_x2:      .res 2
-fa_y2:      .res 1
-fb_x1:      .res 2
-fb_y1:      .res 1
-fb_x2:      .res 2
-fb_y2:      .res 1
-my1:        .res 1
-my2:        .res 1
 zk:         .res 1
 zcount:     .res 1
 zlist:      .res NWIN + 1
@@ -2209,12 +2271,23 @@ win_x_hi:   .res NWIN
 win_y:      .res NWIN
 menu_open:  .res 1
 menu_hl:    .res 1
+zoom_on:    .res 1
+zoom_win:   .res 1
 zoom_i:     .res 1
 zoom_n:     .res 1
 zr_x1:      .res 2
 zr_y1:      .res 1
 zr_x2:      .res 2
 zr_y2:      .res 1
+back:       .res 1                  ; the buffer being drawn (0 or 1)
+flip:       .res 1                  ; show it at the next frame
+dre:        .res 2                  ; per buffer: dirty rectangle empty
+drx1l:      .res 2
+drx1h:      .res 2
+dry1:       .res 2
+drx2l:      .res 2
+drx2h:      .res 2
+dry2:       .res 2
 rain_pos:   .res 1
 n_pos:      .res 1
 n_col:      .res 1
@@ -2224,6 +2297,5 @@ n_timer:    .res 1
 g_addr:     .res 3
 g_rows:     .res 1
 pn_x:       .res 1
-pyh:        .res 1
 dxl:        .res 1
 dxh:        .res 1

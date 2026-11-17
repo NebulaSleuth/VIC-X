@@ -13,7 +13,7 @@ the CPU has to do while VIC-X does the work.
 | `bigworld` | A 320x3198 world (1 MB, six scenes from space to a molten core) scrolling up and down, one new row streamed in per frame | XRAM, a 256-row VRAM ring with a wrapping bitmap base, row DMA, XRAM window (scene table), REU DMA (captions) |
 | `wide` | The parallax world switching every 5 seconds between the 320x200 window and the whole visible frame; in full-frame mode the text bar moves to the top of the frame | wide window, edges latched per line and per frame, scroll offsets that keep the scene still, a sprite-engine text bar, layer order |
 | `sixteen` | A plain C64 multicolour bitmap, alternating between the stock palette and 16 colours picked for the picture | VIC-II colour remap (CTRL bit 3) |
-| `desktop` | A GEOS-style desktop: icons, menus, overlapping windows (notes that type themselves, a photo, the palette, an About box) dragged with a mouse or joystick | tile layer (desktop) behind a bitmap layer (windows), VIC-II text between them, sprite pointer, 2D DMA copies and fills from XRAM, XRAM window (the CPU writes text into the window pictures), layer order, palette rotation |
+| `desktop` | A GEOS-style desktop: icons, menus, overlapping windows (notes that type themselves, a photo, the palette, an About box) dragged with a mouse or joystick | a double-buffered 8-bit bitmap redrawn by 2D DMA copies and fills from XRAM (only what changed), VIC-II text in front, sprite pointer, XRAM window (the CPU writes text into the pictures), palette rotation |
 
 ## Artwork
 
@@ -162,10 +162,14 @@ the REU, a demo says what is missing and stops.
   title and then an item (View changes the wallpaper). An Amiga mouse does
   not work: it needs a 1351 adapter. A test build
   (`VICX_DEMO_DEFS=DESK_TEST python build.py desktop`) plays a script that
-  does all of this, for checking it in headless VICE. A moved window
-  costs two repaints a frame: the strips it uncovers (cleared, then the
-  windows below copied in, clipped) and the window at its new place, all
-  by DMA. Its program is longer than the others, so it moves the loader's
+  does all of this, for checking it in headless VICE. The desktop, the
+  windows and the menus are pictures in XRAM; a change marks a rectangle
+  dirty, and each frame the hidden buffer's dirty rectangle is redrawn
+  (desktop, then the windows from the back, clipped) and shown at the next
+  frame, so nothing half-drawn is ever seen. The buttons and the mouse are
+  read while the CPU waits for the frame or the blitter, so short clicks
+  count and the 1351's 6-bit counters do not wrap between reads; two mouse
+  counts move the pointer one pixel. Its program is longer than the others, so it moves the loader's
   buffer (`LD_IN`) up to `$3800`; `lib/demo.inc` stops the link if a
   program reaches `LD_IN`. `tests/fastload_check.py` reports XRAM
   differences for it, because the demo writes its text into XRAM after

@@ -6,8 +6,8 @@
 Draws everything the desktop demo needs except its text (the demo writes
 the text itself, with the C64's character ROM, into the images in XRAM):
 
-  desktop.tiles / .map    the desktop (wallpaper, menu bar, icons) as an
-                          8-bit tile layer, 64x32 map
+  desktop.img             the desktop (wallpaper, menu bar, icons), 320x200
+                          8-bit pixels; the icon labels are text
   desktop.pal             palette entries 16-95 (interface, wallpaper,
                           icons, the 48-colour rainbow the demo rotates)
   desktop_photo.pal       entries 96-255, the photo's colours
@@ -303,7 +303,6 @@ def main():
             d.p[y][x] = c
     d.rect(0, 0, SCREEN_W, 11, WHITE)
     d.rect(0, 11, SCREEN_W, 12, BLACK)
-    labels = []
     icon_rects = []
     for label, draw, x, row, action in ICONS:
         top = 8 * row - 25
@@ -313,27 +312,13 @@ def main():
         col = max(0, min(40 - n, col))
         d.rect(col * 8 - 2, 8 * row + 1, (col + n) * 8 + 2, 8 * row + 11, WHITE)
         d.box(col * 8 - 2, 8 * row + 1, (col + n) * 8 + 2, 8 * row + 11, BLACK)
-        labels.append((row, col, label))
+        text("DESK_IMG", SCREEN_W, col * 8, 8 * row + 2, BLACK, WHITE, label)
         x1 = min(x, col * 8 - 2)
         x2 = max(x + 32, (col + n) * 8 + 2)
         icon_rects.append((x1, top, x2, 8 * row + 11, action))
 
-    # tiles
-    tiles, index, tmap = [], {}, [0] * (64 * 32)
-    blank = bytes(64)
-    index[blank] = 0
-    tiles.append(blank)
-    for ty in range(25):
-        for tx in range(40):
-            t = bytes(d.p[ty * 8 + y][tx * 8 + x] for y in range(8) for x in range(8))
-            if t not in index:
-                index[t] = len(tiles)
-                tiles.append(t)
-            tmap[ty * 64 + tx] = index[t]
-    with open(os.path.join(out, "desktop.tiles"), "wb") as f:
-        f.write(b"".join(tiles))
-    with open(os.path.join(out, "desktop.map"), "wb") as f:
-        f.write(b"".join(n.to_bytes(2, "little") for n in tmap))
+    with open(os.path.join(out, "desktop.img"), "wb") as f:
+        f.write(d.bytes())
 
     # pointer
     arrow = [
@@ -579,16 +564,12 @@ def main():
         L.append(f"menu_inv_{part}:")
         L.append("        .byte " + ", ".join(f"<(MENU{k}_INV >> {sh})" for k in range(len(MENUS))))
     bytes_line("bar_text", bar)
-    L.append("labels:          ; screen address, then screen codes, 0; a 0 address ends")
-    for row, col, label in labels:
-        L.append(f"        .word $0400 + {row * 40 + col}")
-        L.append("        .byte " + ", ".join(str(c) for c in sc(label)) + ", 0")
-    L.append("        .word 0")
-    L.append("texts:           ; 1, XRAM address (3), stride, fg, bg, codes, 0 | 2, ..., number | 0")
+    L.append("texts:           ; 1, XRAM address (3), stride (2), fg, bg, codes, 0 | 2, ..., number | 0")
     for t in texts:
         kind, sym, stride, x, y, fg, bg, payload = t
         addr = f"{sym} + {y * stride + x}"
-        L.append(f"        .byte {1 if kind == 't' else 2}, <({addr}), >({addr}), ^({addr}), {stride}, {fg}, {bg}")
+        L.append(f"        .byte {1 if kind == 't' else 2}, <({addr}), >({addr}), ^({addr}), "
+                 f"<{stride}, >{stride}, {fg}, {bg}")
         if kind == "t":
             L.append("        .byte " + ", ".join(str(c) for c in payload) + ", 0")
         else:
@@ -631,7 +612,7 @@ def main():
                     continue
                 rows[y0 + y][x0 + x] = (*full.get(c, (255, 0, 255)), 255)
     pngio.write(os.path.join(out, "desktop_preview.png"), SCREEN_W, SCREEN_H, rows)
-    print(f"desktop: {len(tiles)} tiles, {len(texts)} texts, script {len(script)} steps, "
+    print(f"desktop: {len(texts)} texts, script {len(script)} steps, "
           f"notes {len(lines)} lines")
 
 
