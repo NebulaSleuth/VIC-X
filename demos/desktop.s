@@ -249,12 +249,15 @@ main:
         sta VICX_CTRL
         lda VICX_FRAME
         sta last_vf
+        sta rr_t0
+        lda #0
+        sta rr_max
 
 ; --- the frame loop -------------------------------------------------------
 loop:
         jsr wait_frame
         lda flip                        ; show what was drawn last frame
-        beq :+
+        beq :++
         VICX_P0_SET VICX_LAYER0 + VICX_L_BASE, VICX_STEP_1
         lda #0
         sta VICX_P0_DATA
@@ -263,9 +266,18 @@ loop:
         sta VICX_P0_DATA                ; $00000 or $10000
         eor #1
         sta back
-        lda #0
+        lda last_vf                     ; frames this redraw took to show
+        sec
+        sbc paint_vf
+        cmp rr_max
+        bcc :+
+        sta rr_max
+:       lda #0
         sta flip
-:       jsr cpu_start
+:       jsr rate_show
+        lda last_vf
+        sta it_vf
+        jsr cpu_start
         inc frame
         jsr read_input
 .ifdef DESK_TEST
@@ -280,7 +292,11 @@ loop:
         jsr type_step
         jsr rainbow_step
         jsr paint
-        jsr cpu_end
+        lda flip                        ; a redraw was made this frame
+        beq :+
+        lda it_vf
+        sta paint_vf
+:       jsr cpu_end
         jmp loop
 
 ; Wait for raster lines 251-255 (below the display window), reading the
@@ -1905,6 +1921,60 @@ set_wallpaper:
         rts
 
 ; Rotate the rainbow entries while the Colours window is open.
+; The redraw rate, "nn fps" in the menu bar: every 32 frames, the frame
+; rate divided by the most frames any redraw in them took from its start to
+; being shown (50 or 60 when every redraw fits in a frame); "--" when
+; nothing was redrawn.  Waiting for the border counts.
+RATE_TEXT = $0400 + 24
+rate_show:
+        lda last_vf
+        sec
+        sbc rr_t0
+        cmp #32
+        bcs :+
+        rts
+:       lda last_vf
+        sta rr_t0
+        lda #$2D                        ; "--"
+        sta RATE_TEXT
+        sta RATE_TEXT + 1
+        ldx rr_max
+        beq @label
+        lda #50                         ; PAL; NTSC 60 ($02A6 = 0)
+        ldy $02A6
+        bne :+
+        lda #60
+:       ldy #0                          ; Y = rate / max
+:       stx t0
+        sec
+        sbc t0
+        bcc :+
+        iny
+        bcs :-
+:       tya
+        ldx #$30                        ; tens
+:       cmp #10
+        bcc :+
+        sbc #10
+        inx
+        bne :-
+:       ora #$30
+        sta RATE_TEXT + 1
+        txa
+        cpx #$30
+        bne :+
+        lda #$20
+:       sta RATE_TEXT
+@label: lda #$06                        ; " fps"
+        sta RATE_TEXT + 3
+        lda #$10
+        sta RATE_TEXT + 4
+        lda #$13
+        sta RATE_TEXT + 5
+        lda #0
+        sta rr_max
+        rts
+
 rainbow_step:
         lda win_open + 2
         beq @rts
@@ -2406,3 +2476,7 @@ last_vf:    .res 1                  ; VICX_FRAME at the last frame
 rpc:        .res 1                  ; rows a DMA chunk
 rows_left:  .res 1
 m16:        .res 2
+it_vf:      .res 1                  ; VICX_FRAME at this frame's start
+paint_vf:   .res 1                  ; ... at the start of the last redraw
+rr_t0:      .res 1                  ; ... when the rate was last shown
+rr_max:     .res 1                  ; most frames a redraw took meanwhile
