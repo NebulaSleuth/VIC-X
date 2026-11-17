@@ -28,6 +28,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "tools"))
 import lzpack  # noqa: E402
+import d64write  # noqa: E402
 
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parent
@@ -200,9 +201,10 @@ EXTRAS = {"bullets": lambda d: bullet_tables(d / "tables.inc")}
 def assemble(demo):
     obj = BUILD / f"{demo}.o"
     prg = BUILD / f"{demo}.prg"
-    run([Path(CC65) / "ca65", "-I", REPO / "include", "-I", HERE / "lib", "-I", BUILD / demo,
+    defs = [x for d in os.environ.get("VICX_DEMO_DEFS", "").split() for x in ("-D", d)]
+    run([Path(CC65) / "ca65", "-g", *defs, "-I", REPO / "include", "-I", HERE / "lib", "-I", BUILD / demo,
          "-o", obj, HERE / f"{demo}.s"])
-    run([Path(CC65) / "ld65", "-C", HERE / "lib" / "demo.cfg", "-o", prg, obj])
+    run([Path(CC65) / "ld65", "-C", HERE / "lib" / "demo.cfg", "-Ln", BUILD / f"{demo}.lbl", "-o", prg, obj])
     return prg
 
 
@@ -214,6 +216,13 @@ def disk(demo, prg):
     image = BUILD / f"{demo}.{kind}"
     for old in (BUILD / f"{demo}.d64", BUILD / f"{demo}.d81"):
         old.unlink(missing_ok=True)
+    if kind == "d64":
+        # the data file's sectors ~122 ms apart, what the fast loader needs
+        # between two (tools/d64write.py); the 1581 reads whole tracks
+        d64write.write(image, f"VIC-X {demo.upper()}", "VX",
+                       [(demo.upper(), "prg", prg.read_bytes(), 10),
+                        (f"{demo.upper()}.DAT", "seq", dat.read_bytes(), "122ms")])
+        return image
     env = dict(os.environ)
     env["PATH"] = DLLDIR + os.pathsep + env.get("PATH", "")
     run([C1541, "-format", f"vic-x {demo},vx", kind, image,

@@ -358,8 +358,10 @@ CLOSE   = $FFC3
 CHKIN   = $FFC6
 CLRCHN  = $FFCC
 CHRIN   = $FFCF
+CLALL   = $FFE7
 STATUS  = $90
 LAST_DEVICE = $BA
+ld_getv = $FD                   ; (word) CHRIN or fl_get
 
 load_data:
         XRAM_TO_C64 SIG_XRAM, ld_sig, 16
@@ -375,6 +377,17 @@ ld_go:  jsr uci_load                    ; on an Ultimate: the .reu straight from
         bcs :+
         rts
 :       jsr ld_screen
+        lda #<fl_get                    ; a 1541 or 1581: the fast loader
+        sta ld_getv
+        lda #>fl_get
+        sta ld_getv + 1
+        jsr fl_start
+        bcs :+
+        jmp ld_hdr
+:       lda #<CHRIN                     ; else the KERNAL
+        sta ld_getv
+        lda #>CHRIN
+        sta ld_getv + 1
         lda #DATA_NAME_LEN
         ldx #<data_name
         ldy #>data_name
@@ -394,12 +407,45 @@ ld_go:  jsr uci_load                    ; on an Ultimate: the .reu straight from
         bcc :+
         jmp ld_err
 :
-        jsr CHRIN                       ; "VX"
+.ifdef FL_RAWTEST
+; test build: the file as it arrives, 8 KB at a time, into XRAM from 0
+ld_hdr: lda #0
+        sta ld_xaddr
+        sta ld_xaddr + 1
+        sta ld_xaddr + 2
+        sta ld_raw
+        lda #$04
+        sta ld_raw + 1
+@blk:   lda #<LD_OUT
+        sta ld_dst
+        lda #>LD_OUT
+        sta ld_dst + 1
+@b:     jsr ld_get
+        ldy #0
+        sta (ld_dst),y
+        inc ld_dst
+        bne @b
+        inc ld_dst + 1
+        lda ld_dst + 1
+        cmp #>(LD_OUT + $0400)
+        bne @b
+        jsr ld_store
+        clc
+        lda ld_xaddr + 1
+        adc #$04
+        sta ld_xaddr + 1
+        bcc @blk
+        inc ld_xaddr + 2
+        jmp @blk
+.else
+ld_hdr:
+.endif
+        jsr ld_get                      ; "VX"
         cmp #$56
         beq :+
         jmp ld_err
 :
-        jsr CHRIN
+        jsr ld_get
         cmp #$58
         beq :+
         jmp ld_err
@@ -409,21 +455,21 @@ ld_go:  jsr uci_load                    ; on an Ultimate: the .reu straight from
         sta ld_col
 
 ld_block:
-        jsr CHRIN                       ; packed size, 0 = end
+        jsr ld_get                       ; packed size, 0 = end
         sta ld_csize
-        jsr CHRIN
+        jsr ld_get
         sta ld_csize + 1
         ora ld_csize
         beq ld_done
-        jsr CHRIN                       ; XRAM address
+        jsr ld_get                       ; XRAM address
         sta ld_xaddr
-        jsr CHRIN
+        jsr ld_get
         sta ld_xaddr + 1
-        jsr CHRIN
+        jsr ld_get
         sta ld_xaddr + 2
-        jsr CHRIN                       ; unpacked size
+        jsr ld_get                       ; unpacked size
         sta ld_raw
-        jsr CHRIN
+        jsr ld_get
         sta ld_raw + 1
         lda #<LD_IN                     ; read the packed bytes
         sta ld_dst
@@ -433,7 +479,11 @@ ld_block:
         sta ld_cnt
         lda ld_csize + 1
         sta ld_cnt + 1
-ld_rd:  jsr CHRIN
+        lda fl_on
+        beq ld_rd
+        jsr fl_read                     ; fast: straight from the sector buffer
+        jmp ld_rdone
+ld_rd:  jsr ld_get
         ldy #0
         sta (ld_dst),y
         inc ld_dst
@@ -446,6 +496,7 @@ ld_rd:  jsr CHRIN
         lda ld_cnt
         ora ld_cnt + 1
         bne ld_rd
+ld_rdone:
         lda STATUS                      ; device missing, timeouts
         and #%10000011
         beq :+
@@ -457,7 +508,10 @@ ld_rd:  jsr CHRIN
         jmp ld_block
 
 ld_done:
-        jsr CLRCHN
+        lda fl_on
+        beq :+
+        jsr fl_drain                    ; let the fast loader finish
+:       jsr CLRCHN
         lda #2
         jsr CLOSE
         ; the signature last: only a complete load counts
@@ -474,6 +528,9 @@ ld_err: jsr CLRCHN
         jmp demo_fail
 
         .include "uci.inc"             ; uci_load: the .reu from USB on an Ultimate
+        .include "fastload.inc"        ; fl_start, fl_get: 1541 and 1581
+
+ld_get: jmp (ld_getv)
 
 ; DMA LD_OUT (ld_raw bytes) to XRAM ld_xaddr; the CPU waits while it runs.
 ld_store:
@@ -512,7 +569,8 @@ ld_store:
         sta VICX_DMA_CMD
         rts
 
-; Unpack LD_IN into LD_OUT (ld_raw bytes).
+; Unpack LD_IN into LD_OUT (ld_raw bytes).  Literals and matches are both
+; copied with lz_copy, a page at a time.
 lz_unpack:
         lda #<LD_IN
         sta ld_src
@@ -545,19 +603,15 @@ lz_tok: jsr lz_get                      ; token
 :       lda ld_cnt
         ora ld_cnt + 1
         beq lz_lend
-lz_lit: jsr lz_get                      ; copy the literals
-        ldy #0
-        sta (ld_dst),y
-        inc ld_dst
-        bne :+
-        inc ld_dst + 1
-:       lda ld_cnt
-        bne :+
-        dec ld_cnt + 1
-:       dec ld_cnt
-        lda ld_cnt
-        ora ld_cnt + 1
-        bne lz_lit
+        lda ld_src                      ; the literals
+        sta ld_ref
+        lda ld_src + 1
+        sta ld_ref + 1
+        jsr lz_copy
+        lda ld_ref
+        sta ld_src
+        lda ld_ref + 1
+        sta ld_src + 1
 lz_lend:
         lda ld_dst + 1                  ; output full?
         cmp ld_end + 1
@@ -593,24 +647,43 @@ lz_match:
         sta ld_cnt
         bcc :+
         inc ld_cnt + 1
-:       ldy #0
-lz_copy:
-        lda (ld_ref),y
-        sta (ld_dst),y
-        inc ld_ref
-        bne :+
-        inc ld_ref + 1
-:       inc ld_dst
-        bne :+
-        inc ld_dst + 1
-:       lda ld_cnt
-        bne :+
-        dec ld_cnt + 1
-:       dec ld_cnt
-        lda ld_cnt
-        ora ld_cnt + 1
-        bne lz_copy
+:       jsr lz_copy
         jmp lz_tok
+
+; Copy ld_cnt (> 0) bytes from (ld_ref) to (ld_dst), forward one byte at a
+; time (so a match may overlap its own output); both pointers move on.
+lz_copy:
+        ldy #0
+        ldx ld_cnt + 1                  ; whole pages
+        beq @rest
+@pg:    lda (ld_ref),y
+        sta (ld_dst),y
+        iny
+        bne @pg
+        inc ld_ref + 1
+        inc ld_dst + 1
+        dex
+        bne @pg
+@rest:  ldx ld_cnt
+        beq @out
+@r:     lda (ld_ref),y
+        sta (ld_dst),y
+        iny
+        dex
+        bne @r
+        tya
+        clc
+        adc ld_ref
+        sta ld_ref
+        bcc :+
+        inc ld_ref + 1
+:       tya
+        clc
+        adc ld_dst
+        sta ld_dst
+        bcc @out
+        inc ld_dst + 1
+@out:   rts
 
 lz_get: ldy #0
         lda (ld_src),y

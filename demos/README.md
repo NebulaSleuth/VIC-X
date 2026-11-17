@@ -57,26 +57,35 @@ default place):
 `build.py` also makes a disk image per demo, with the demo first (so it
 autostarts) and its data file: a D64 (1541) when it fits, a D81 (1581) for
 `gallery` and `bigworld`. The data is packed in 8 KB blocks
-(`../tools/lzpack.py`); the demo reads it with the KERNAL from the drive it
-was loaded from, unpacks each block and DMAs it into XRAM, with a progress
-bar. That works on any machine with VIC-X and an REU of 2 MB or more: VICE,
-a MiSTer or an Ultimate, from a real drive or a disk image. If XRAM already
-holds the demo's data (an REU image loaded with it, or an earlier run), it
-starts at once.
+(`../tools/lzpack.py`); the demo reads it from the drive it was loaded from,
+unpacks each block and DMAs it into XRAM, with a progress bar. That works on
+any machine with VIC-X and an REU of 2 MB or more: VICE, a MiSTer or an
+Ultimate, from a real drive or a disk image. If XRAM already holds the
+demo's data (an REU image loaded with it, or an earlier run), it starts at
+once.
 
-| Demo | Disk | Packed data | Load time at standard 1541 speed |
-|------|------|-------------|----------------------------------|
-| `sixteen` | D64 | 14 KB | about 40 seconds |
-| `parallax` | D64 | 44 KB | about 2 minutes (measured in VICE) |
-| `wide` | D64 | 52 KB | about 2.5 minutes |
-| `bullets` | D64 | 59 KB | about 2.5 minutes |
-| `gallery` | D81 | 265 KB | about 12 minutes |
-| `bigworld` | D81 | 453 KB | about 20 minutes |
+On a 1541 or 1581 (true drive emulation in VICE, the MiSTer's drives 8 and
+9, a real drive) the demos use their own fast loader (`lib/fastload.inc`):
+drive code that reads the file's sectors and sends each byte two bits at a
+time over CLK and DATA. On anything else (1571, SD2IEC, VICE's virtual
+drive) they load through the KERNAL, at about 380 bytes a second. The D64s
+are written by `../tools/d64write.py`, with the data file's sectors spaced
+for the fast loader (about 122 ms apart); in a D64 written with the
+standard interleave the fast loader still works, at half the speed.
 
-The KERNAL loads about 380 bytes a second from a stock drive. Anything that
-speeds up the KERNAL (JiffyDOS, a speeder cartridge, VICE's warp) speeds up
-these loads too; a fast loader or the Ultimate's own file access would be
-the next step for real hardware.
+| Demo | Disk | Packed data | Fast loader (VICE) | KERNAL |
+|------|------|-------------|--------------------|--------|
+| `sixteen` | D64 | 14 KB | 10 s | about 40 s |
+| `parallax` | D64 | 44 KB | 29 s | about 2 minutes |
+| `wide` | D64 | 52 KB | 34 s | about 2.5 minutes |
+| `bullets` | D64 | 59 KB | 37 s | about 2.5 minutes |
+| `gallery` | D81 | 265 KB | 93 s | about 12 minutes |
+| `bigworld` | D81 | 453 KB | 3 minutes | about 20 minutes |
+
+The times are from the demo starting to it running, including unpacking
+(1 MB for `bigworld`). `../tests/fastload_check.py` runs a demo from its
+disk image in headless VICE and checks what lands in XRAM against its REU
+image.
 
 Fast-load cartridges are no way round this: they use the `$DE00-$DFFF` I/O
 area, where the REU (that is, XRAM) lives, and most of them only speed up a
