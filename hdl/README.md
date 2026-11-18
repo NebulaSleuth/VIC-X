@@ -86,7 +86,9 @@ free slot, 4 slots a C64 cycle, 3 while the REU's DMA runs):
   that change): 64,000 bytes XRAM to VRAM in 191 raster lines (about
   5.2 MB/s), a fill in 127 lines (7.9 MB/s), 217 lines with an 8-bit
   bitmap layer on; with the wait, 229 lines with the layer on (a fill
-  148) and the same as before with it off. Copies are under the spec's 8 MB/s target: each 8
+  148) and the same as before with it off; since VIC-X reads take a
+  clock more (the two-stage pin capture, 2026-11-18), 253 lines with the
+  layer on (a fill 164). Copies are under the spec's 8 MB/s target: each 8
   bytes take one read slot and four one-word write slots.
 - Collisions are checked one pair a clock as each line shows. A heap of
   sprites with hundreds of pairs at a pixel falls behind, so the list can

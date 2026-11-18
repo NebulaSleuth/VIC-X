@@ -136,6 +136,12 @@ deadlines could be missed. Kept as a fallback.
   could be the pin's input register). Now one register (`fq`) samples the
   pins on every falling edge and is the fast input register in every
   build; VIC-X words and the core's own reads are taken from it.
+- 2026-11-18: the hop from that pin register to the rising-edge users was
+  half a clock and missed timing once the core was 94% full; a second
+  falling-edge register (`fq_d`) now gives it a whole clock. The core's
+  own read data is ready at e7 (it reads at e8); VIC-X reads end two
+  clocks later (rvalid e12), which costs the blitter about 10% while a
+  layer fetches.
 - Not yet: EasyFlash cartridges; turbo (VIC-X would lose the turbo slots);
   the conflict flag and vx_miss are not visible on the hardware.
 
