@@ -52,7 +52,7 @@ entity vicx_sprites is
         f_gnt       : in  std_logic;
         f_valid     : in  std_logic;
         f_data      : in  std_logic_vector(63 downto 0);
-        f_busy      : out std_logic;                        -- selecting, or rows to fetch
+        f_busy      : out std_logic;                        -- rows still to fetch
 
         x           : in  unsigned(8 downto 0);             -- window pixel
         x_done      : in  std_logic;                        -- pixel x is being shown
@@ -219,7 +219,8 @@ architecture rtl of vicx_sprites is
 begin
 
     f_req    <= req_r;
-    f_busy   <= '1' when st = P_SEL or st = P_SEL2 or fst = F_BLK or req_r = '1' or waiting = '1' or
+    -- (selection reads only the latched table, not VRAM)
+    f_busy   <= '1' when fst = F_BLK or req_r = '1' or waiting = '1' or
                          (fst = F_NEXT and fk < nsel) else '0';
     f_addr   <= addr_r;
     p_req    <= preq_r;
