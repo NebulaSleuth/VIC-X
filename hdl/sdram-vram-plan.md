@@ -131,6 +131,11 @@ deadlines could be missed. Kept as a fallback.
 - On the MiSTer (2026-11-15): step 1 tests as before, `tests/hw/ram_check`,
   `reu_check` (16 MB) and `vram_check` (all 128 KB both ways, step-640 reads
   four cycles apart, write then read on the other port) pass.
+- 2026-11-17: a build whose placement moved the VIC-X read capture read
+  wrong data (the four word registers sampled the pins directly; only one
+  could be the pin's input register). Now one register (`fq`) samples the
+  pins on every falling edge and is the fast input register in every
+  build; VIC-X words and the core's own reads are taken from it.
 - Not yet: EasyFlash cartridges; turbo (VIC-X would lose the turbo slots);
   the conflict flag and vx_miss are not visible on the hardware.
 
