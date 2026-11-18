@@ -87,9 +87,12 @@
 --   BA does.
 --   Optional operations (CAP_BLIT generic, read at $D05B): bit 0 expand and
 --   masked expand (operations 3, 4), a source byte per 8 destination
---   pixels, most significant bit first.  The others are not built: a
---   descriptor with a direction bit (+1 bits 6-7), and DMA_CMD with bit 2
---   (a list in VRAM), do nothing.
+--   pixels, most significant bit first; bit 1 remap (operation 5): the
+--   256-byte table is read from VRAM through the read cache as the
+--   descriptor starts, into a block RAM, and each byte is looked up there
+--   (two more clocks a byte).  The others are not built: a descriptor with
+--   a direction bit (+1 bits 6-7), and DMA_CMD with bit 2 (a list in
+--   VRAM), do nothing.
 --
 -- Reset
 --   reset locks VIC-X, clears CTRL, IRQ, the ports and the layer setup, and restores the
@@ -281,9 +284,13 @@ architecture rtl of vicx is
     -- DMA engine
     constant HAS_DMA  : boolean := EXT_VRAM and CAP_FEAT(3) = '1';
     constant HAS_EXPAND : boolean := HAS_DMA and CAP_BLIT(0) = '1';
+    constant HAS_REMAP  : boolean := HAS_DMA and CAP_BLIT(1) = '1';
     function blit_caps return std_logic_vector is
+        variable c : std_logic_vector(7 downto 0) := x"00";
     begin
-        if HAS_EXPAND then return x"01"; else return x"00"; end if;
+        if HAS_EXPAND then c(0) := '1'; end if;
+        if HAS_REMAP then c(1) := '1'; end if;
+        return c;
     end function;
     type d8_t  is array (0 to 3) of std_logic_vector(7 downto 0);
     type d16_t is array (0 to 3) of unsigned(15 downto 0);
@@ -292,8 +299,18 @@ architecture rtl of vicx is
     signal dsc_op, dsc_sp, dsc_fill, dsc_tr, dsc_next : d8_t := (others => (others => '0'));
     signal dsc_src, dsc_dst : d24_t := (others => (others => '0'));
     signal dsc_w, dsc_h, dsc_ss, dsc_ds : d16_t := (others => (others => '0'));
+    signal dsc_tbl    : d24_t := (others => (others => '0'));   -- remap table (+21-+23)
+    -- remap: the table, loaded from VRAM as the descriptor starts
+    type lut_t is array (0 to 255) of std_logic_vector(7 downto 0);
+    signal lut        : lut_t;
+    signal lut_we     : std_logic := '0';
+    signal lut_wa, lut_ra : unsigned(7 downto 0) := (others => '0');
+    signal lut_wd, lut_q  : std_logic_vector(7 downto 0) := (others => '0');
+    signal dm_tbl     : unsigned(23 downto 0) := (others => '0');
+    signal dm_ti      : unsigned(8 downto 0) := (others => '0');
     type dmst_t is (DM_IDLE, DM_START, DM_BYTE, DM_RWAIT, DM_RRD, DM_RR1, DM_RR2,
-                  DM_PUT, DM_FLUSH, DM_WWAIT, DM_NEXT);
+                  DM_PUT, DM_FLUSH, DM_WWAIT, DM_NEXT,
+                  DM_TLOAD, DM_TWAIT, DM_LUT1, DM_LUT2);
     signal dm_st      : dmst_t := DM_IDLE;
     signal dm_ret     : dmst_t := DM_IDLE;          -- where a flush goes back to
     signal dm_busy    : std_logic := '0';
@@ -534,6 +551,17 @@ architecture rtl of vicx is
     end function;
 
 begin
+
+    -- the remap table: one write and one registered read a clock
+    lut_mem : process (clk)
+    begin
+        if rising_edge(clk) then
+            if lut_we = '1' then
+                lut(to_integer(lut_wa)) <= lut_wd;
+            end if;
+            lut_q <= lut(to_integer(lut_ra));
+        end if;
+    end process;
 
     -- VIC-X owns $D040-$D06F while unlocked; the mirrors at $D100-$D3FF never
     claim <= '1' when vic_cs = '1' and unlocked = '1' and cpu_addr(9 downto 8) = "00"
@@ -787,6 +815,7 @@ begin
         variable dput    : boolean;
         variable dsrcv   : boolean;                -- dval is a source byte
         variable dskip   : boolean;                -- masked: not stored
+        variable ta      : unsigned(24 downto 0);  -- remap table byte's SDRAM address
         variable sdst    : unsigned(24 downto 0);  -- SDRAM address of the destination
         variable ssrc    : unsigned(24 downto 0);
         variable dkind   : natural range 0 to 3;   -- 0 nothing, 1 SDRAM, 2 regs, 3 low palette
@@ -847,6 +876,9 @@ begin
                     when 18 => dsc_fill(q) <= d;
                     when 19 => dsc_tr(q)   <= d;
                     when 20 => dsc_next(q) <= d;
+                    when 21 => dsc_tbl(q)(7 downto 0)   <= unsigned(d);
+                    when 22 => dsc_tbl(q)(15 downto 8)  <= unsigned(d);
+                    when 23 => dsc_tbl(q)(23 downto 16) <= unsigned(d);
                     when others => null;
                 end case;
             end if;
@@ -1195,6 +1227,7 @@ begin
             -- DMA engine: one step per clock
             if HAS_DMA then
                 dput := false;
+                lut_we <= '0';
                 dsrcv := false;
                 dskip := false;
                 dval := x"FF";
@@ -1236,8 +1269,9 @@ begin
                         -- reserved operations and spaces, and empty transfers, do nothing
                         -- (and optional ones this build lacks: expand without
                         -- CAP_BLIT bit 0, the direction bits 6-7)
-                        if unsigned(dsc_op(dn)) > 4 or
-                           (unsigned(dsc_op(dn)) > 2 and not HAS_EXPAND) or
+                        if unsigned(dsc_op(dn)) > 5 or
+                           (unsigned(dsc_op(dn)) > 2 and unsigned(dsc_op(dn)) < 5 and not HAS_EXPAND) or
+                           (dsc_op(dn) = x"05" and not HAS_REMAP) or
                            dsc_sp(dn)(7 downto 6) /= "00" or dsc_sp(dn)(3 downto 2) = "11" or
                            (dsc_op(dn) /= x"01" and dsc_sp(dn)(1 downto 0) = "11") or
                            dsc_w(dn) = 0 or (dsc_sp(dn)(4) = '1' and dsc_h(dn) = 0) then
@@ -1247,7 +1281,13 @@ begin
                                (dsc_op(dn) /= x"01" and dsc_sp(dn)(1 downto 0) = "00") then
                                 dm_c64 <= '1';
                             end if;
-                            dm_st <= DM_BYTE;
+                            if HAS_REMAP and dsc_op(dn) = x"05" then
+                                dm_tbl <= dsc_tbl(dn);
+                                dm_ti  <= (others => '0');
+                                dm_st  <= DM_TLOAD;
+                            else
+                                dm_st <= DM_BYTE;
+                            end if;
                         end if;
 
                     when DM_BYTE =>
@@ -1339,6 +1379,40 @@ begin
                         dval := dm_val;
                         dput := true;
 
+                    -- remap: the table, a byte a clock through the read cache
+                    when DM_TLOAD =>
+                        if dm_ti(8) = '1' then
+                            dm_st <= DM_BYTE;
+                        else
+                            ta := to_unsigned(VRAM_BASE, 25) +
+                                  resize((dm_tbl + resize(dm_ti, 24)) mod VRAM_SIZE, 25);
+                            if dm_cvalid = '1' and dm_ckey = ta(24 downto 3) then
+                                lut_we <= '1';
+                                lut_wa <= dm_ti(7 downto 0);
+                                lut_wd <= byte_of(dm_cdata, ta(2 downto 0));
+                                dm_ti  <= dm_ti + 1;
+                            else
+                                dmr_addr <= ta(24 downto 3) & "000";
+                                dmr_we   <= '0';
+                                dmr_req  <= '1';
+                                dm_ckey  <= ta(24 downto 3);
+                                dm_st    <= DM_TWAIT;
+                            end if;
+                        end if;
+                    when DM_TWAIT =>
+                        if dmok then
+                            dm_cdata  <= vx_rdata;
+                            dm_cvalid <= '1';
+                            dm_st     <= DM_TLOAD;
+                        end if;
+                    -- remap: the looked-up byte, a clock after its address
+                    when DM_LUT1 =>
+                        dm_st <= DM_LUT2;
+                    when DM_LUT2 =>
+                        dm_map(dm_ds, dm_t, dkind, sdst);
+                        dval := lut_q;
+                        dput := true;
+
                     when DM_FLUSH =>
                         if dm_wvram = '1' then
                             -- VRAM: into the port write queue, updating the copies
@@ -1407,8 +1481,14 @@ begin
                         end if;
                     end if;
                 end if;
-                if dm_op = "010" and dval = dm_tr then
-                    dskip := true;                  -- masked copy
+                if (dm_op = "010" or (dm_op = "101" and dsrcv)) and dval = dm_tr then
+                    dskip := true;                  -- masked copy, remap
+                end if;
+                -- remap: look the source byte up first (DM_LUT1, DM_LUT2)
+                if HAS_REMAP and dput and dsrcv and dm_op = "101" and not dskip then
+                    lut_ra <= unsigned(dval);
+                    dput   := false;
+                    dm_st  <= DM_LUT1;
                 end if;
 
                 -- a register-space store waits for a clock without a CPU write
@@ -1657,6 +1737,7 @@ begin
                 dsc_fill  <= (others => (others => '0'));
                 dsc_tr    <= (others => (others => '0'));
                 dsc_next  <= (others => (others => '0'));
+                dsc_tbl   <= (others => (others => '0'));
                 dsc_src   <= (others => (others => '0'));
                 dsc_dst   <= (others => (others => '0'));
                 dsc_w     <= (others => (others => '0'));

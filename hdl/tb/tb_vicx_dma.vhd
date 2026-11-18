@@ -3,6 +3,7 @@
 -- port; every transfer is also run on a reference that follows the VICE
 -- fork's dma_run (src/vicx/vicx.c), and the memories are compared after it.
 -- Covers copy, fill, masked copy, expand and masked expand (CAP_BLIT bit 0),
+-- remap (bit 1),
 -- straight and 2D, chains with the IRQ,
 -- the register space (palette entries 0-15 and above), XRAM wrapping,
 -- overlapping copies, reserved operations, starts while busy, the CPU halt,
@@ -134,7 +135,7 @@ begin
     end generate;
 
     dut : entity work.vicx
-        generic map (VRAM_BITS => 17, CAP_SPR => 0, CAP_SPRLINE => 0, CAP_FEAT => x"0A", CAP_BLIT => x"01",
+        generic map (VRAM_BITS => 17, CAP_SPR => 0, CAP_SPRLINE => 0, CAP_FEAT => x"0A", CAP_BLIT => x"03",
                      EXT_VRAM => true)
         port map (
             clk => clk, reset => reset,
@@ -340,7 +341,8 @@ begin
         -- descriptor n with these fields, written through the port
         procedure desc(n : natural; op, spaces : natural; src, dst : natural;
                        w : natural; hgt : natural := 0; ss : natural := 0; ds : natural := 0;
-                       fill : natural := 0; tr : natural := 0; nxt : natural := 255) is
+                       fill : natural := 0; tr : natural := 0; nxt : natural := 255;
+                       tbl : natural := 0) is
             variable b : desc_t := (others => 0);
         begin
             b(0) := op; b(1) := spaces;
@@ -353,6 +355,7 @@ begin
             b(14) := ss mod 256;  b(15) := ss / 256;
             b(16) := ds mod 256;  b(17) := ds / 256;
             b(18) := fill; b(19) := tr; b(20) := nxt;
+            b(21) := tbl mod 256; b(22) := (tbl / 256) mod 256; b(23) := (tbl / 65536) mod 256;
             port_set(1, 16#20880# + 32 * n);
             for k in 0 to 31 loop
                 wr(16#D053#, b(k), 4);
@@ -369,6 +372,9 @@ begin
             variable val  : natural;
             variable s0, t0 : natural;
             variable bit1 : boolean;
+            type tbl_t is array (0 to 255) of natural;
+            variable tbl  : tbl_t;
+            variable ta   : natural;
         begin
             irq_want := false;
             n := n0;
@@ -396,7 +402,13 @@ begin
                 tr   := ref.get(3, base + 19);
                 nxt  := ref.get(3, base + 20);
                 -- reserved: operations above 4, the direction bits (not built)
-                if not (op > 4 or ref.get(3, base + 1) >= 64 or dsp = 3 or (op /= 1 and ssp = 3)) then
+                if op = 5 then                  -- the table, as it starts
+                    ta := ref.get(3, base + 21) + 256 * ref.get(3, base + 22) + 65536 * ref.get(3, base + 23);
+                    for k in 0 to 255 loop
+                        tbl(k) := ref.get(1, (ta + k) mod VRAM_SZ);
+                    end loop;
+                end if;
+                if not (op > 5 or ref.get(3, base + 1) >= 64 or dsp = 3 or (op /= 1 and ssp = 3)) then
                     for r in 0 to hh - 1 loop
                         if twod then
                             s0 := src + r * sst; t0 := dst + r * dst2;
@@ -406,7 +418,7 @@ begin
                         for i in 0 to w - 1 loop
                             if op = 1 then
                                 ref_wr(dsp, t0 + i, fill);
-                            elsif op >= 3 then
+                            elsif op = 3 or op = 4 then
                                 -- expand: bit 7 - i mod 8 of source byte i / 8
                                 val  := ref_rd(ssp, s0 + i / 8);
                                 bit1 := (val / 2 ** (7 - i mod 8)) mod 2 = 1;
@@ -418,6 +430,9 @@ begin
                             else
                                 val := ref_rd(ssp, s0 + i);
                                 if op = 0 or val /= tr then
+                                    if op = 5 then
+                                        val := tbl(val);
+                                    end if;
                                     ref_wr(dsp, t0 + i, val);
                                 end if;
                             end if;
@@ -562,8 +577,8 @@ begin
 
         -- expand and masked expand
         rd(16#D05B#, v);
-        if v /= x"01" then
-            fail("CAP_BLIT $" & hex(v) & ", want $01");
+        if v /= x"03" then
+            fail("CAP_BLIT $" & hex(v) & ", want $03");
         end if;
         desc(0, 3, 2 + 1 * 4, 16#012345#, 16#06003#, 1003, fill => 16#A1#, tr => 16#B2#);
         run(0, "expand XRAM to VRAM, 1003 pixels");
@@ -573,6 +588,16 @@ begin
         run(2, "2D expand C64 RAM to XRAM", c64 => true);
         desc(3, 4, 1 + 1 * 4, 16#20013#, 16#07001#, 40, fill => 16#E7#);
         run(3, "masked expand from the palette");
+        -- remap: tables in VRAM (unaligned, and wrapping at the top)
+        desc(0, 5, 2 + 1 * 4, 16#020000#, 16#06200#, 700, tr => 16#00#, tbl => 16#01F03#);
+        run(0, "remap XRAM to VRAM, transparent 0");
+        desc(1, 5, 0 + 2 * 4 + 16, 16#C200#, 16#061000#, 19, 7, 40, 64, tr => 16#FF#, tbl => 16#1FF85#);
+        run(1, "2D remap C64 RAM to XRAM, table wrapping", c64 => true);
+        desc(2, 5, 1 + 1 * 4, 16#20020#, 16#06600#, 64, tr => 16#100# - 1, tbl => 16#00807#);
+        run(2, "remap from the register space");
+        desc(3, 5, 1 + 1 * 4, 16#06700#, 16#01F03#, 200, tr => 16#13#, tbl => 16#01F03#);
+        run(3, "remap into its own table");
+
         -- a direction bit (not built): nothing; DMA_CMD bit 2: nothing starts
         desc(0, 0, 2 + 1 * 4 + 64, 16#012345#, 16#07100#, 50);
         run(0, "copy with the mirror bit: nothing");
