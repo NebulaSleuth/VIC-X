@@ -2,7 +2,8 @@
 -- C64 RAM and XRAM (2 MB) sit behind a model of the SDRAM controller's VIC-X
 -- port; every transfer is also run on a reference that follows the VICE
 -- fork's dma_run (src/vicx/vicx.c), and the memories are compared after it.
--- Covers copy, fill and masked copy, straight and 2D, chains with the IRQ,
+-- Covers copy, fill, masked copy, expand and masked expand (CAP_BLIT bit 0),
+-- straight and 2D, chains with the IRQ,
 -- the register space (palette entries 0-15 and above), XRAM wrapping,
 -- overlapping copies, reserved operations, starts while busy, the CPU halt,
 -- and a port's copy seeing a DMA write.
@@ -133,7 +134,7 @@ begin
     end generate;
 
     dut : entity work.vicx
-        generic map (VRAM_BITS => 17, CAP_SPR => 0, CAP_SPRLINE => 0, CAP_FEAT => x"0A",
+        generic map (VRAM_BITS => 17, CAP_SPR => 0, CAP_SPRLINE => 0, CAP_FEAT => x"0A", CAP_BLIT => x"01",
                      EXT_VRAM => true)
         port map (
             clk => clk, reset => reset,
@@ -367,6 +368,7 @@ begin
             variable base : natural;
             variable val  : natural;
             variable s0, t0 : natural;
+            variable bit1 : boolean;
         begin
             irq_want := false;
             n := n0;
@@ -393,7 +395,8 @@ begin
                 fill := ref.get(3, base + 18);
                 tr   := ref.get(3, base + 19);
                 nxt  := ref.get(3, base + 20);
-                if not (op > 2 or dsp = 3 or (op /= 1 and ssp = 3)) then
+                -- reserved: operations above 4, the direction bits (not built)
+                if not (op > 4 or ref.get(3, base + 1) >= 64 or dsp = 3 or (op /= 1 and ssp = 3)) then
                     for r in 0 to hh - 1 loop
                         if twod then
                             s0 := src + r * sst; t0 := dst + r * dst2;
@@ -403,6 +406,15 @@ begin
                         for i in 0 to w - 1 loop
                             if op = 1 then
                                 ref_wr(dsp, t0 + i, fill);
+                            elsif op >= 3 then
+                                -- expand: bit 7 - i mod 8 of source byte i / 8
+                                val  := ref_rd(ssp, s0 + i / 8);
+                                bit1 := (val / 2 ** (7 - i mod 8)) mod 2 = 1;
+                                if bit1 then
+                                    ref_wr(dsp, t0 + i, fill);
+                                elsif op = 3 then
+                                    ref_wr(dsp, t0 + i, tr);
+                                end if;
                             else
                                 val := ref_rd(ssp, s0 + i);
                                 if op = 0 or val /= tr then
@@ -545,8 +557,34 @@ begin
         -- a chain 0 -> 1 -> 2 -> 0 (ends: 0 already ran), IRQ on 1, reserved op on 2
         desc(0, 1, 2 * 4, 0, 16#040000#, 64, fill => 16#11#, nxt => 1);
         desc(1, 1, 2 * 4 + 32, 0, 16#040040#, 64, fill => 16#22#, nxt => 2);
-        desc(2, 3, 2 * 4, 0, 16#040080#, 64, fill => 16#33#, nxt => 0);
+        desc(2, 7, 2 * 4, 0, 16#040080#, 64, fill => 16#33#, nxt => 0);
         run(0, "chain with IRQ and a reserved operation");
+
+        -- expand and masked expand
+        rd(16#D05B#, v);
+        if v /= x"01" then
+            fail("CAP_BLIT $" & hex(v) & ", want $01");
+        end if;
+        desc(0, 3, 2 + 1 * 4, 16#012345#, 16#06003#, 1003, fill => 16#A1#, tr => 16#B2#);
+        run(0, "expand XRAM to VRAM, 1003 pixels");
+        desc(1, 4, 1 + 1 * 4 + 16, 16#00F00#, 16#06805#, 37, 9, 5, 320, fill => 16#C4#);
+        run(1, "2D masked expand VRAM to VRAM");
+        desc(2, 3, 0 + 2 * 4 + 16, 16#C123#, 16#060007#, 21, 6, 3, 64, fill => 16#5D#, tr => 16#00#);
+        run(2, "2D expand C64 RAM to XRAM", c64 => true);
+        desc(3, 4, 1 + 1 * 4, 16#20013#, 16#07001#, 40, fill => 16#E7#);
+        run(3, "masked expand from the palette");
+        -- a direction bit (not built): nothing; DMA_CMD bit 2: nothing starts
+        desc(0, 0, 2 + 1 * 4 + 64, 16#012345#, 16#07100#, 50);
+        run(0, "copy with the mirror bit: nothing");
+        desc(0, 1, 1 * 4, 0, 16#07200#, 50, fill => 16#77#);
+        wr(16#D05A#, 4);
+        idle(400);
+        rd(16#D05A#, v);
+        if v(7) = '1' then
+            fail("DMA_CMD bit 2 started a transfer");
+        end if;
+        desc(0, 1, 1 * 4, 0, 0, 0);
+        run(0, "after DMA_CMD bit 2: nothing changed");
 
         -- a DMA write reaches a port's copy of its block
         port_set(0, 16#05000#);

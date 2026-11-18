@@ -85,6 +85,11 @@
 --   tb_vicx_step2 with DMA and WX 40).  While a descriptor that touches C64
 --   RAM runs, cpu_halt is high; the core holds the CPU the way the VIC-II's
 --   BA does.
+--   Optional operations (CAP_BLIT generic, read at $D05B): bit 0 expand and
+--   masked expand (operations 3, 4), a source byte per 8 destination
+--   pixels, most significant bit first.  The others are not built: a
+--   descriptor with a direction bit (+1 bits 6-7), and DMA_CMD with bit 2
+--   (a list in VRAM), do nothing.
 --
 -- Reset
 --   reset locks VIC-X, clears CTRL, IRQ, the ports and the layer setup, and restores the
@@ -110,6 +115,9 @@ entity vicx is
         CAP_SPR      : natural := 0;            -- what this build provides
         CAP_SPRLINE  : natural := 0;
         CAP_FEAT     : std_logic_vector(7 downto 0) := x"00";
+        -- optional blitter operations (CAP_BLIT, $D05B); so far bit 0,
+        -- expand and masked expand
+        CAP_BLIT     : std_logic_vector(7 downto 0) := x"00";
         EXT_VRAM     : boolean := false;        -- VRAM through the vx_* port
         -- where the vx_* port finds each space (SDRAM byte addresses)
         VRAM_BASE    : natural := 16#0100000#;
@@ -272,6 +280,11 @@ architecture rtl of vicx is
 
     -- DMA engine
     constant HAS_DMA  : boolean := EXT_VRAM and CAP_FEAT(3) = '1';
+    constant HAS_EXPAND : boolean := HAS_DMA and CAP_BLIT(0) = '1';
+    function blit_caps return std_logic_vector is
+    begin
+        if HAS_EXPAND then return x"01"; else return x"00"; end if;
+    end function;
     type d8_t  is array (0 to 3) of std_logic_vector(7 downto 0);
     type d16_t is array (0 to 3) of unsigned(15 downto 0);
     type d24_t is array (0 to 3) of unsigned(23 downto 0);
@@ -288,7 +301,8 @@ architecture rtl of vicx is
     signal dm_n       : natural range 0 to 3 := 0;
     signal dm_ran     : std_logic_vector(3 downto 0) := (others => '0');
     signal dm_irqp    : std_logic := '0';
-    signal dm_op      : std_logic_vector(1 downto 0) := "00";
+    signal dm_op      : std_logic_vector(2 downto 0) := "000";
+    signal dm_ex      : std_logic := '0';           -- expand or masked expand
     signal dm_ss      : std_logic_vector(1 downto 0) := "00";
     signal dm_ds      : std_logic_vector(1 downto 0) := "00";
     signal dm_fill    : std_logic_vector(7 downto 0) := (others => '0');
@@ -771,6 +785,8 @@ begin
         variable dmok    : boolean;                -- the engine finished the DMA's request
         variable dval    : std_logic_vector(7 downto 0);
         variable dput    : boolean;
+        variable dsrcv   : boolean;                -- dval is a source byte
+        variable dskip   : boolean;                -- masked: not stored
         variable sdst    : unsigned(24 downto 0);  -- SDRAM address of the destination
         variable ssrc    : unsigned(24 downto 0);
         variable dkind   : natural range 0 to 3;   -- 0 nothing, 1 SDRAM, 2 regs, 3 low palette
@@ -1097,8 +1113,9 @@ begin
                                 when 16#55# | 16#58# => win(off - 16#54#) <= "00000" & cpu_din(2 downto 0);
                                 when 16#56# | 16#59# => win(off - 16#54#) <= cpu_din(7) & "0000" & cpu_din(2 downto 0);
                                 when 16#5A# =>
-                                    -- DMA_CMD: start a chain; ignored while busy
-                                    if HAS_DMA and dm_busy = '0' then
+                                    -- DMA_CMD: start a chain; ignored while busy,
+                                    -- and with bit 2 (a list in VRAM: not built)
+                                    if HAS_DMA and dm_busy = '0' and cpu_din(2) = '0' then
                                         dm_busy <= '1';
                                         dm_n    <= to_integer(unsigned(cpu_din(1 downto 0)));
                                         dm_ran  <= (others => '0');
@@ -1169,6 +1186,7 @@ begin
                         port_addr(p) <= stepped(a, port_step(p));
                     when 16#54# to 16#59# => v := win(off - 16#54#);
                     when 16#5A# => v := dm_busy & "0000000";   -- DMA_CMD: bit 7 busy
+                    when 16#5B# => v := blit_caps;              -- CAP_BLIT
                     when others => v := x"FF";          -- reserved, and $D06F
                 end case;
                 rd_val <= v;
@@ -1177,6 +1195,8 @@ begin
             -- DMA engine: one step per clock
             if HAS_DMA then
                 dput := false;
+                dsrcv := false;
+                dskip := false;
                 dval := x"FF";
                 case dm_st is
                     when DM_IDLE =>
@@ -1188,7 +1208,12 @@ begin
                         if dsc_sp(dn)(5) = '1' then
                             dm_irqp <= '1';
                         end if;
-                        dm_op   <= dsc_op(dn)(1 downto 0);
+                        dm_op   <= dsc_op(dn)(2 downto 0);
+                        if dsc_op(dn) = x"03" or dsc_op(dn) = x"04" then
+                            dm_ex <= '1';
+                        else
+                            dm_ex <= '0';
+                        end if;
                         dm_ss   <= dsc_sp(dn)(1 downto 0);
                         dm_ds   <= dsc_sp(dn)(3 downto 2);
                         dm_fill <= dsc_fill(dn);
@@ -1209,7 +1234,11 @@ begin
                         end if;
                         dm_cvalid <= '0';
                         -- reserved operations and spaces, and empty transfers, do nothing
-                        if unsigned(dsc_op(dn)) > 2 or dsc_sp(dn)(3 downto 2) = "11" or
+                        -- (and optional ones this build lacks: expand without
+                        -- CAP_BLIT bit 0, the direction bits 6-7)
+                        if unsigned(dsc_op(dn)) > 4 or
+                           (unsigned(dsc_op(dn)) > 2 and not HAS_EXPAND) or
+                           dsc_sp(dn)(7 downto 6) /= "00" or dsc_sp(dn)(3 downto 2) = "11" or
                            (dsc_op(dn) /= x"01" and dsc_sp(dn)(1 downto 0) = "11") or
                            dsc_w(dn) = 0 or (dsc_sp(dn)(4) = '1' and dsc_h(dn) = 0) then
                             dm_st <= DM_NEXT;
@@ -1247,15 +1276,16 @@ begin
                                 -- the buffered word first
                                 dm_ret <= DM_BYTE;
                                 dm_st  <= DM_FLUSH;
-                            elsif dm_op = "01" then
+                            elsif dm_op = "001" then
                                 dval := dm_fill;
                                 dput := true;
                             else
                                 case skind is
                                     when 1 =>
                                         if dm_cvalid = '1' and dm_ckey = ssrc(24 downto 3) then
-                                            dval := byte_of(dm_cdata, ssrc(2 downto 0));
-                                            dput := true;
+                                            dval  := byte_of(dm_cdata, ssrc(2 downto 0));
+                                            dput  := true;
+                                            dsrcv := true;
                                         elsif dm_wbe /= "00" then
                                             dm_ret <= DM_BYTE;
                                             dm_st  <= DM_FLUSH;
@@ -1274,10 +1304,12 @@ begin
                                         else
                                             dval := pal_v(to_integer(dm_s(5 downto 0)));
                                         end if;
-                                        dput := true;
+                                        dput  := true;
+                                        dsrcv := true;
                                     when others =>
-                                        dval := x"FF";      -- unmapped, or no XRAM
-                                        dput := true;
+                                        dval  := x"FF";     -- unmapped, or no XRAM
+                                        dput  := true;
+                                        dsrcv := true;
                                 end case;
                             end if;
                         end if;
@@ -1299,8 +1331,9 @@ begin
                         dm_st <= DM_RR2;
                     when DM_RR2 =>
                         dm_map(dm_ds, dm_t, dkind, sdst);
-                        dval := regs_q;
-                        dput := true;
+                        dval  := regs_q;
+                        dput  := true;
+                        dsrcv := true;
                     when DM_PUT =>
                         dm_map(dm_ds, dm_t, dkind, sdst);
                         dval := dm_val;
@@ -1362,9 +1395,24 @@ begin
                         end if;
                 end case;
 
+                -- expand: the source byte's bit for this pixel (most
+                -- significant first) picks the fill or the transparent value
+                if HAS_EXPAND and dput and dsrcv and dm_ex = '1' then
+                    if dval(7 - to_integer(dm_i(2 downto 0))) = '1' then
+                        dval := dm_fill;
+                    else
+                        dval := dm_tr;
+                        if dm_op = "100" then
+                            dskip := true;          -- masked expand: 0 leaves it
+                        end if;
+                    end if;
+                end if;
+                if dm_op = "010" and dval = dm_tr then
+                    dskip := true;                  -- masked copy
+                end if;
+
                 -- a register-space store waits for a clock without a CPU write
-                if dput and dkind = 2 and vic_cs = '1' and cpu_wr = '1' and
-                   not (dm_op = "10" and dval = dm_tr) then
+                if dput and dkind = 2 and vic_cs = '1' and cpu_wr = '1' and not dskip then
                     dput   := false;
                     dm_val <= dval;
                     dm_st  <= DM_PUT;
@@ -1372,7 +1420,7 @@ begin
 
                 -- a byte to store
                 if dput then
-                    if not (dm_op = "10" and dval = dm_tr) then
+                    if not dskip then
                         case dkind is
                             when 1 =>
                                 lane := to_integer(sdst(0 downto 0));
@@ -1414,7 +1462,9 @@ begin
                         end case;
                     end if;
                     dm_i  <= dm_i + 1;
-                    dm_s  <= dm_s + 1;
+                    if dm_ex = '0' or dm_i(2 downto 0) = "111" then
+                        dm_s <= dm_s + 1;               -- expand: a source byte per 8
+                    end if;
                     dm_t  <= dm_t + 1;
                     dm_st <= DM_BYTE;
                 end if;

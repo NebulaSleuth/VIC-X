@@ -56,6 +56,11 @@ stale-fetch discard makes it fail, and so does a memory that takes up to
    while it touches C64 RAM; the XRAM windows make the core send a CPU (or
    REU) access to XRAM. Both need `EXT_VRAM`.
 
+Blitter options (spec: optional per target, CAP_BLIT at `$D05B`): the
+`CAP_BLIT` generic picks them. Done: expand and masked expand (bit 0;
+`tb_vicx_dma` checks them against VICE's `dma_run`). Not yet: remap,
+scaled copy, direction, lists in VRAM.
+
 Wide window: done. The block counts pixels from the line's start and
 learns where the 320x200 area begins from the VIC-II, so the edges can move
 out by up to 32 pixels each side, 35 lines up and 37 down (VICE's PAL

@@ -304,7 +304,8 @@ begin
         expect(16#D045#, 0, "t04 CAP_SPR");
         expect(16#D046#, 0, "t04 CAP_SPRLINE");
         expect(16#D047#, 0, "t04 CAP_FEAT");
-        for a in 16#D05B# to 16#D06F# loop
+        expect(16#D05B#, 16#00#, "t04 CAP_BLIT (none in this build)");
+        for a in 16#D05C# to 16#D06F# loop
             expect(a, 16#FF#, "t04 reserved");
         end loop;
         rd(16#D140#, v, o);
