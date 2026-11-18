@@ -47,6 +47,7 @@ VICX_W1_PAGEL   = $D057
 VICX_W1_PAGEH   = $D058
 VICX_W1_SLOT    = $D059
 VICX_DMA_CMD    = $D05A         ; W start descriptor 0-3; R bit 7 busy
+VICX_CAP_BLIT   = $D05B         ; R optional blitter operations (VICX_BLIT_*)
 
 ; --- CTRL bits ----------------------------------------------------------
 VICX_CTRL_L0     = $01          ; layer 0 on
@@ -182,6 +183,8 @@ VICX_D_NEXT     = 20            ; next descriptor 0-3, or VICX_DMA_NONE
 VICX_DMA_COPY     = 0
 VICX_DMA_FILL     = 1
 VICX_DMA_MASKED   = 2
+VICX_DMA_EXPAND   = 3             ; optional: CAP_BLIT bit 0
+VICX_DMA_EXPAND_MASKED = 4
 VICX_DMA_SRC_C64  = $00         ; C64 RAM (64 KB, never ROM or I/O)
 VICX_DMA_SRC_VRAM = $01         ; the port address space: VRAM and registers
 VICX_DMA_SRC_XRAM = $02
@@ -190,8 +193,16 @@ VICX_DMA_DST_VRAM = $04
 VICX_DMA_DST_XRAM = $08
 VICX_DMA_2D       = $10
 VICX_DMA_IRQ      = $20         ; raise IRQ_STAT bit 1 when the chain ends
+VICX_DMA_MIRROR   = $40         ; optional: CAP_BLIT bit 3
+VICX_DMA_BACKWARD = $80
 VICX_DMA_NONE     = $FF
 VICX_DMA_BUSY     = $80         ; DMA_CMD read
+VICX_DMA_LIST     = $04         ; DMA_CMD write: run a list in VRAM (optional)
+VICX_BLIT_EXPAND  = $01         ; CAP_BLIT bits
+VICX_BLIT_REMAP   = $02
+VICX_BLIT_SCALED  = $04
+VICX_BLIT_DIRECTION = $08
+VICX_BLIT_LIST    = $10
 
 ; --- Sprite table entry (8 bytes at VICX_SPRITES + n * 8) ---------------
 VICX_S_XL       = 0             ; X bits 0-7 (display-window pixels)

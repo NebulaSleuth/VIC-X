@@ -3,7 +3,7 @@
 ;
 ; Values in the VICE model: VERSION $01 (spec 0.1 draft), CAP_VRAM $10
 ; (128 KB), CAP_SPR $80 and CAP_SPRLINE $20 (the target limits), CAP_FEAT $1F
-; (all features since step 5).  CAP_XRAM is the REU size in MB: 0 here,
+; (all features since step 5), CAP_BLIT $01 (expand).  CAP_XRAM is the REU size in MB: 0 here,
 ; since this run has no REU (t27 checks it with one).
 ;
 ; RUN: -vicx
@@ -56,8 +56,14 @@ main:
         ; DMA_CMD: not busy
         EXPECT VICX_DMA_CMD, $00, 18
 
-        ; reserved $D05B-$D06E read $FF and ignore writes
-        ldx #$5B
+        ; CAP_BLIT: bits 5-7 read 0 (bits 0-4 say which optional blitter
+        ; operations the build has)
+        lda VICX_CAP_BLIT
+        and #$E0
+        EXPECT_A $00, 22
+
+        ; reserved $D05C-$D06E read $FF and ignore writes
+        ldx #$5C
 @res:   lda #$00
         sta $D000,x
         lda $D000,x
