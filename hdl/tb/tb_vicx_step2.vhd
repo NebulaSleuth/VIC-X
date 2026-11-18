@@ -177,8 +177,8 @@ begin
     ---------------------------------------------------------------------------
     -- the SDRAM controller's VIC-X port: a slot is 4 clocks, 8 slots a C64
     -- cycle; VIC-X may start in DMA0 (1) and CPU0/4/8 (4-6).  A request held
-    -- at a slot's start is acknowledged in the next clock; read data come 4
-    -- clocks after that (sdram_vicx.vhd: ack at e2, rvalid at e10).
+    -- at a slot's start is acknowledged in the next clock; read data come 5
+    -- clocks after that (sdram_vicx.vhd: ack at e2, rvalid at e12).
 
     mem_model : process (clk)
         variable mem   : vram_t := vram_init;
@@ -197,7 +197,7 @@ begin
             for k in 0 to 3 loop
                 if tq(k) >= 0 then
                     tq(k) := tq(k) + 1;
-                    if tq(k) = 4 then
+                    if tq(k) = 5 then
                         vx_rdata  <= bq(k);
                         vx_rvalid <= '1';
                         tq(k) := -1;
