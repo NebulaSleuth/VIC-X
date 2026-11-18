@@ -13,6 +13,11 @@
 ; at XRAM $000000, mapped at $4000), and the REU's own DMA copies a scene's
 ; caption from XRAM straight into screen memory, since XRAM is the REU's
 ; memory.
+;
+; The music streams from XRAM too: 280 KB of SID register frames
+; (tools/gen_music.py), one section for each scene.  Each frame the CPU
+; points window 1 ($6000) at the frame's 8 KB page and copies its 25 bytes
+; to the SID; a new scene's section starts at the next bar line.
 
 NEED_XRAM_MB = 2
 CPU_TEXT     = $0400 + 0 * 40 + 32  ; top row, right
@@ -23,6 +28,9 @@ RING_ROWS = 256
 RING_STRIDE = 512
 VIEW_ROWS = 200
 WIN       = $4000               ; window 0: XRAM page 0 = the header
+MWIN      = $6000               ; window 1: the music's current page
+mptr      = $FD                 ; 2 bytes: the music frame in window 1
+SID       = $D400
 CAPTION   = $0400 + 24 * 40     ; bottom row
 
 REU_CMD   = $DF01
@@ -67,6 +75,17 @@ main:
         sta VICX_W0_PAGEH
         lda #VICX_SLOT_4000 | VICX_SLOT_ON
         sta VICX_W0_SLOT
+        ; window 1 at $6000 for the music (the loader's buffer, free now)
+        lda #<(MUSIC >> 13)
+        sta VICX_W1_PAGEL
+        lda #>(MUSIC >> 13)
+        sta VICX_W1_PAGEH
+        lda #VICX_SLOT_6000 | VICX_SLOT_ON
+        sta VICX_W1_SLOT
+        lda #$FF
+        sta msec                        ; no section yet: the first starts at once
+        lda #0
+        sta mbc
 
         lda #0
         sta ypos
@@ -137,8 +156,72 @@ loop:
         sta VICX_P0_DATA
 
         jsr caption
+        jsr music
         jsr cpu_end
         jmp loop
+
+; One frame of music: the scene's section (switching at a bar line), frame
+; mf of it, from XRAM through window 1 into the SID's 25 registers.
+music:  lda seg
+        cmp msec
+        beq @play
+        lda mbc                         ; a new scene: at the next bar line
+        bne @play
+        lda seg
+        sta msec
+        lda #0
+        sta mf
+        sta mf + 1
+@play:  ldx msec
+        clc                             ; page: MUSIC's + the section's + mf / 256
+        lda #<(MUSIC >> 13)
+        adc mus_start,x
+        sta t16
+        lda #>(MUSIC >> 13)
+        adc #0
+        sta t16 + 1
+        lda t16
+        clc
+        adc mf + 1
+        sta VICX_W1_PAGEL
+        lda t16 + 1
+        adc #0
+        sta VICX_W1_PAGEH
+        lda mf                          ; frame (mf & 255) * 32 in the window
+        lsr
+        lsr
+        lsr
+        clc
+        adc #>MWIN
+        sta mptr + 1
+        lda mf
+        asl
+        asl
+        asl
+        asl
+        asl
+        sta mptr
+        ldy #24
+:       lda (mptr),y
+        sta SID,y
+        dey
+        bpl :-
+        inc mf                          ; next frame; the section loops
+        bne :+
+        inc mf + 1
+:       lda mf + 1
+        cmp mus_pages,x
+        bne :+
+        lda #0
+        sta mf
+        sta mf + 1
+:       inc mbc                         ; the bar counter
+        lda mbc
+        cmp mus_bar,x
+        bne :+
+        lda #0
+        sta mbc
+:       rts
 
 ; DMA world row `row' into ring row `row' & 255 (rows past the end are not
 ; needed and are skipped).
@@ -298,3 +381,6 @@ src:    .res 3
 t16:    .res 2
 seg:    .res 1
 newseg: .res 1
+msec:   .res 1                  ; music: the section playing
+mf:     .res 2                  ; ... its frame
+mbc:    .res 1                  ; ... the frame in its bar

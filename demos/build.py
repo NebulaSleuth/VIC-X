@@ -30,6 +30,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "tools"))
 import lzpack  # noqa: E402
 import d64write  # noqa: E402
+import gen_music  # noqa: E402
 
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parent
@@ -80,6 +81,7 @@ DEMOS = {
         ("WORLD_HDR", "bigworld_hdr.bin"),      # first: XRAM $000000, window page 0
         ("WORLD_PIX", "bigworld.pix"), ("WORLD_PAL", "bigworld.pal"),
         ("WORLD_CAPS", "bigworld_caps.bin"),
+        ("MUSIC", "bigworld_music.bin", 0x2000),  # on an 8 KB page: the window
     ],
     "wide": [
         ("BACK_TILES", "parallax_back_wide.tiles"), ("BACK_MAP", "parallax_back_wide.map"),
@@ -121,7 +123,24 @@ def world_files():
     hdr = bytes([len(starts)]) + b"".join(s.to_bytes(2, "little") for s in starts)
     (BUILD / "bigworld_hdr.bin").write_bytes(hdr)
     (BUILD / "bigworld_caps.bin").write_bytes(b"".join(screen_codes(c) for c in WORLD_CAPTIONS))
-    return [f"WORLD_ROWS    = {info['rows']}", f"WORLD_SEGS    = {len(starts)}"]
+    # the music: one section a scene, SID register frames (tools/gen_music.py)
+    secs = gen_music.sections()
+    assert len(secs) == len(starts), "a music section for each scene"
+    (BUILD / "bigworld_music.bin").write_bytes(b"".join(s["frames"] for s in secs))
+    page, pages, bars = 0, [], []
+    lines = [f"WORLD_ROWS    = {info['rows']}", f"WORLD_SEGS    = {len(starts)}",
+             ".pushseg", ".rodata"]
+    starts_p = []
+    for s in secs:
+        starts_p.append(page)
+        pages.append(s["nframes"] // 256)
+        bars.append(s["bar"])
+        page += s["nframes"] // 256
+    lines += ["mus_start:    .byte " + ", ".join(map(str, starts_p)) + "   ; 8 KB pages from MUSIC",
+              "mus_pages:    .byte " + ", ".join(map(str, pages)),
+              "mus_bar:      .byte " + ", ".join(map(str, bars)) + "   ; frames a bar",
+              ".popseg"]
+    return lines
 
 
 BLITTER_RAM = 0xC000                # where the blitter demo's big tables go
@@ -215,7 +234,10 @@ def pack(demo, assets):
     if demo in PREPACK:
         lines += PREPACK[demo]()
     pos = 0
-    for sym, fname in assets:
+    for item in assets:
+        sym, fname = item[:2]
+        if len(item) > 2:                       # an alignment of its own
+            pos = (pos + item[2] - 1) & ~(item[2] - 1)
         path = BUILD / fname if (BUILD / fname).exists() else ART / fname
         data = path.read_bytes()
         if pos + len(data) > REU_SIZE:
