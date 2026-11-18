@@ -18,7 +18,7 @@
 
 NEED_XRAM_MB = 2
 CPU_TEXT     = $0400 + 24 * 40 + 32     ; bottom row, right
-LD_IN        = $3800                    ; the loader's buffer, above the program
+LD_IN        = $3F00                    ; the loader's buffer, above the program
 .include "demo.inc"
 .include "assets.inc"
 .include "tables.inc"
@@ -52,6 +52,8 @@ BOXB_X  = 184                   ; ... and its mirror image
 PAN_Y   = 110                   ; picture rows the panorama shows
 PAN_MAX = 320 - BOX_W
 LAKE_Y  = 96                    ; the reflection: rows 96-191
+SCALE_FRAMES = 750              ; 15 s
+NORB    = 6                     ; ships in orbit
 CARD_FRAMES   = 150             ; 3 s
 
 ; zero page
@@ -90,6 +92,15 @@ pvy     = $3E                   ; 2 bytes: ... and top y
 sa      = $40                   ; spotlight path position
 pp      = $41                   ; panorama: picture column at the box's left
 pdir    = $42                   ; 0: moving right (backwards copy), 1: left
+d_xs    = $43                   ; 2 bytes: scaled copy X step (+24-+25)
+d_ys    = $45                   ; 2 bytes: ... and Y step (+26-+27)
+oa      = $47                   ; orbit angle
+za      = $48                   ; centre zoom angle
+fa      = $49                   ; centre flip angle
+ok      = $4A                   ; object number
+mirf    = $4B                   ; draw: mirrored when not 0
+ow      = $4C                   ; draw: width
+oh      = $4D                   ; draw: height
 
 .code
 main:
@@ -173,8 +184,8 @@ scene:
 
 scene_bit: .byte VICX_BLIT_EXPAND, VICX_BLIT_REMAP, VICX_BLIT_SCALED
            .byte VICX_BLIT_DIRECTION, VICX_BLIT_LIST
-scene_lo:  .byte <expand_scene, <remap_scene, <card, <dir_scene, <card
-scene_hi:  .byte >expand_scene, >remap_scene, >card, >dir_scene, >card
+scene_lo:  .byte <expand_scene, <remap_scene, <scale_scene, <dir_scene, <card
+scene_hi:  .byte >expand_scene, >remap_scene, >scale_scene, >dir_scene, >card
 
 ; The scene's name on the bottom row (cols 0-30).
 show_name:
@@ -398,6 +409,252 @@ box_src:
         lda back
         sta d_dst + 2
         jmp dma_go
+
+; --- scaled copy -------------------------------------------------------------
+; One 32x32 ship drawn at any size by scaled copy: big in the centre,
+; zooming in and out and turning like a card (its width shrinks to nothing,
+; then it grows back mirrored), and six small ones in orbit, their size
+; giving the depth (the far ones are drawn first).  Each frame the boxes
+; this buffer drew last time get the picture back first.
+scale_scene:
+        jsr pic_both
+        XRAM_TO_VRAM SHIP_PAL, VICX_PALETTE + 208 * 4, SHIP_PAL_LEN
+        lda #0
+        sta pn
+        sta pn + 1
+        lda #<SCALE_FRAMES
+        sta tmr
+        lda #>SCALE_FRAMES
+        sta tmr + 1
+@lp:    jsr frame
+        ; the picture back where this buffer's ships were
+        lda back
+        asl
+        asl
+        asl
+        sta ok                          ; this buffer's list: back * 8
+        ldx back
+        lda pn,x
+        beq @drawn_back
+        sta t2
+@rest:  ldx ok
+        lda px_lo,x
+        sta cx
+        lda px_hi,x
+        sta cx + 1
+        lda py,x
+        sta cy
+        lda pw,x
+        sta d_w
+        lda ph,x
+        sta d_h
+        lda #VICX_DMA_COPY
+        sta d_op
+        jsr box
+        inc ok
+        dec t2
+        bne @rest
+@drawn_back:
+        ldx back
+        lda #0
+        sta pn,x
+        ; far ships, the centre ship, near ships
+        lda #0
+        jsr orbiters
+        jsr centre
+        lda #1
+        jsr orbiters
+        inc oa
+        inc za
+        inc fa
+        inc fa
+        lda #1
+        sta drawn
+        jsr cpu_end
+        jsr count
+        beq :+
+        jmp @lp
+:       lda #0                          ; leave the steps at 1:1
+        sta d_xs
+        sta d_ys
+        rts
+
+; The orbiting ships behind (A = 0: size under 24) or in front (A = 1).
+orbiters:
+        sta t2
+        ldy #0
+@one:   sty ok
+        tya                             ; angle: oa + k * 43
+        asl
+        asl
+        sta t0
+        tya
+        asl
+        asl
+        asl
+        asl
+        asl
+        clc
+        adc t0                          ; k * 36
+        adc ok
+        adc ok
+        adc ok
+        adc ok
+        adc ok
+        adc ok
+        adc ok                          ; + k * 7 = k * 43
+        clc
+        adc oa
+        tax
+        lda od,x                        ; front or back?
+        cmp #24
+        lda #0
+        rol                             ; 1 when size >= 24
+        cmp t2
+        bne @next
+        lda od,x
+        sta ow
+        sta oh
+        lsr
+        sta t0                          ; half the size
+        lda ox_lo,x
+        sec
+        sbc t0
+        sta cx
+        lda ox_hi,x
+        sbc #0
+        sta cx + 1
+        lda oy,x
+        sec
+        sbc t0
+        sta cy
+        lda #0
+        sta mirf
+        jsr draw_ship
+@next:  ldy ok
+        iny
+        cpy #NORB
+        bne @one
+        rts
+
+; The centre ship: height cz[za], width that * fwq[fa] / 128, mirrored
+; when fm[fa].
+centre: ldx za
+        lda cz,x
+        sta oh
+        ldx fa
+        lda fwq,x
+        sta t0
+        lda oh                          ; ow = oh * t0 / 128 (8 x 8 bits)
+        sta t1
+        lda #0
+        ldy #8
+:       lsr t1
+        bcc :+
+        clc
+        adc t0
+:       ror
+        ror t2
+        dey
+        bne :--
+        asl t2                          ; / 128: the high byte * 2 + bit 7
+        rol
+        sta ow
+        cmp #2
+        bcs :+
+        lda #2
+        sta ow
+:       lda fm,x
+        sta mirf
+        lda ow                          ; x = 160 - ow / 2
+        lsr
+        sta t0
+        lda #160
+        sec
+        sbc t0
+        sta cx
+        lda #0
+        sta cx + 1
+        lda oh                          ; y = 96 - oh / 2
+        lsr
+        sta t0
+        lda #96
+        sec
+        sbc t0
+        sta cy
+        ; fall through
+
+; Draw the ship ow x oh at (cx, cy) in the drawn buffer, mirrored if mirf,
+; and note the box in this buffer's list.
+draw_ship:
+        lda #VICX_DMA_SCALED
+        sta d_op
+        lda #VICX_DMA_SRC_XRAM | VICX_DMA_DST_VRAM | VICX_DMA_2D
+        ldx mirf
+        beq :+
+        ora #VICX_DMA_MIRROR
+:       sta d_fl
+        lda #<SHIP_SPR
+        sta d_src
+        lda #>SHIP_SPR
+        sta d_src + 1
+        lda #^SHIP_SPR
+        sta d_src + 2
+        lda ow
+        sta d_w
+        lda #0
+        sta d_w + 1
+        sta d_trans
+        sta d_ss + 1
+        lda oh
+        sta d_h
+        lda #32
+        sta d_ss
+        lda #<320
+        sta d_ds
+        lda #>320
+        sta d_ds + 1
+        ldx ow
+        lda step_lo,x
+        sta d_xs
+        lda step_hi,x
+        sta d_xs + 1
+        ldx oh
+        lda step_lo,x
+        sta d_ys
+        lda step_hi,x
+        sta d_ys + 1
+        ldx cy                          ; destination: cy * 320 + cx
+        lda row_lo,x
+        clc
+        adc cx
+        sta d_dst
+        lda row_hi,x
+        adc cx + 1
+        sta d_dst + 1
+        lda back
+        sta d_dst + 2
+        jsr dma_go
+        ldx back                        ; note the box
+        lda back
+        asl
+        asl
+        asl
+        clc
+        adc pn,x
+        tay
+        inc pn,x
+        lda cx
+        sta px_lo,y
+        lda cx + 1
+        sta px_hi,y
+        lda cy
+        sta py,y
+        lda ow
+        sta pw,y
+        lda oh
+        sta ph,y
+        rts
 
 ; --- direction --------------------------------------------------------------
 ; A box panning over the galaxy that scrolls over itself (moving right needs
@@ -1087,6 +1344,14 @@ dma_go: VICX_P0_SET VICX_DMADESC, VICX_STEP_1
         sta VICX_P0_DATA
         lda d_tbl + 2
         sta VICX_P0_DATA
+        lda d_xs                        ; +24-+27: scaled copy steps
+        sta VICX_P0_DATA
+        lda d_xs + 1
+        sta VICX_P0_DATA
+        lda d_ys
+        sta VICX_P0_DATA
+        lda d_ys + 1
+        sta VICX_P0_DATA
         lda #0
         sta VICX_DMA_CMD
 :       lda VICX_DMA_CMD
@@ -1265,3 +1530,11 @@ bf_out:   sta FONTBUF
         bne :+
         inc bf_out + 2
 :       rts
+
+.bss
+pn:     .res 2                  ; scaled scene: boxes drawn per buffer
+px_lo:  .res 16                 ; ... buffer * 8 + n: x, y, width, height
+px_hi:  .res 16
+py:     .res 16
+pw:     .res 16
+ph:     .res 16

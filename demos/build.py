@@ -91,7 +91,8 @@ DEMOS = {
         ("STOCK", "sixteen_stock.bin"), ("CUSTOM", "sixteen_custom.bin"),
         ("CUSTOM_PAL", "sixteen_custom.pal"),
     ],
-    "blitter": [("SPACE_PIX", "space.pix"), ("SPACE_PAL", "space.pal")],
+    "blitter": [("SPACE_PIX", "space.pix"), ("SPACE_PAL", "space.pal"),
+                ("SHIP_SPR", "ship.spr"), ("SHIP_PAL", "ship.pal")],
     "desktop": [
         ("DESK_IMG", "desktop.img"),
         ("DESK_PAL", "desktop.pal"), ("PHOTO_PAL", "desktop_photo.pal"),
@@ -299,6 +300,24 @@ def blitter_tables(path):
     for i in range(0, 256, 16):
         lines.append("        .byte " + ", ".join(
             str(int(120 + 100 * math.sin(2 * math.pi * a / 256))) for a in range(i, i + 16)))
+    # scaled copy: the 8.8 step that draws the 32-pixel ship d pixels big,
+    # the orbit (x, y, size), the centre ship's zoom and its card flip
+    def tbl(name, vals, comment=""):
+        lines.append(f"{name}:{comment}")
+        for i in range(0, len(vals), 16):
+            lines.append("        .byte " + ", ".join(str(v) for v in vals[i:i + 16]))
+    steps = [32 * 256 // max(1, d) for d in range(129)]
+    tbl("step_lo", [v & 255 for v in steps], "                         ; d = 0-128")
+    tbl("step_hi", [v >> 8 for v in steps])
+    ang = [2 * math.pi * a / 256 for a in range(256)]
+    ox = [int(160 + 120 * math.cos(t)) for t in ang]
+    tbl("ox_lo", [v & 255 for v in ox], "                           ; orbit")
+    tbl("ox_hi", [v >> 8 for v in ox])
+    tbl("oy", [int(96 + 34 * math.sin(t)) for t in ang])
+    tbl("od", [int(24 + 14 * math.sin(t)) for t in ang], "                              ; size 10-38: depth")
+    tbl("cz", [int(80 + 30 * math.sin(t)) for t in ang], "                              ; centre size 50-110")
+    tbl("fwq", [max(4, int(128 * abs(math.cos(t)))) for t in ang], "                             ; flip width, /128")
+    tbl("fm", [1 if math.cos(t) < 0 else 0 for t in ang], "                              ; flip: mirrored")
     lines.append("spot_y:                         ; centre y - 40")
     for i in range(0, 256, 16):
         lines.append("        .byte " + ", ".join(
