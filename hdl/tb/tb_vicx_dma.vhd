@@ -3,7 +3,8 @@
 -- port; every transfer is also run on a reference that follows the VICE
 -- fork's dma_run (src/vicx/vicx.c), and the memories are compared after it.
 -- Covers copy, fill, masked copy, expand and masked expand (CAP_BLIT bit 0),
--- remap (bit 1), mirror and backwards (bit 3) with signed strides,
+-- remap (bit 1), scaled copy (bit 2), mirror and backwards (bit 3) with
+-- signed strides,
 -- straight and 2D, chains with the IRQ,
 -- the register space (palette entries 0-15 and above), XRAM wrapping,
 -- overlapping copies, reserved operations, starts while busy, the CPU halt,
@@ -135,7 +136,7 @@ begin
     end generate;
 
     dut : entity work.vicx
-        generic map (VRAM_BITS => 17, CAP_SPR => 0, CAP_SPRLINE => 0, CAP_FEAT => x"0A", CAP_BLIT => x"0B",
+        generic map (VRAM_BITS => 17, CAP_SPR => 0, CAP_SPRLINE => 0, CAP_FEAT => x"0A", CAP_BLIT => x"0F",
                      EXT_VRAM => true)
         port map (
             clk => clk, reset => reset,
@@ -342,7 +343,7 @@ begin
         procedure desc(n : natural; op, spaces : natural; src, dst : natural;
                        w : natural; hgt : natural := 0; ss : natural := 0; ds : natural := 0;
                        fill : natural := 0; tr : natural := 0; nxt : natural := 255;
-                       tbl : natural := 0) is
+                       tbl : natural := 0; xs : natural := 0; ys : natural := 0) is
             variable b : desc_t := (others => 0);
         begin
             b(0) := op; b(1) := spaces;
@@ -356,6 +357,7 @@ begin
             b(16) := ds mod 256;  b(17) := ds / 256;
             b(18) := fill; b(19) := tr; b(20) := nxt;
             b(21) := tbl mod 256; b(22) := (tbl / 256) mod 256; b(23) := (tbl / 65536) mod 256;
+            b(24) := xs mod 256; b(25) := xs / 256; b(26) := ys mod 256; b(27) := ys / 256;
             port_set(1, 16#20880# + 32 * n);
             for k in 0 to 31 loop
                 wr(16#D053#, b(k), 4);
@@ -374,6 +376,7 @@ begin
             variable ssi, dsi : integer;            -- strides, signed
             variable mir, bwd : boolean;
             variable r, i, di : natural;
+            variable sxs, sys, sri : natural;       -- scaled: steps, source row
             variable bit1 : boolean;
             type tbl_t is array (0 to 255) of natural;
             variable tbl  : tbl_t;
@@ -411,7 +414,9 @@ begin
                         tbl(k) := ref.get(1, (ta + k) mod VRAM_SZ);
                     end loop;
                 end if;
-                if not (op > 5 or dsp = 3 or (op /= 1 and ssp = 3)) then
+                sxs := ref.get(3, base + 24) + 256 * ref.get(3, base + 25);
+                sys := ref.get(3, base + 26) + 256 * ref.get(3, base + 27);
+                if not (op > 6 or dsp = 3 or (op /= 1 and ssp = 3)) then
                     -- signed strides; mirror: byte i to w - 1 - i; backwards:
                     -- last row first, each row from its last byte
                     ssi := sst; dsi := dst2;
@@ -421,8 +426,9 @@ begin
                     bwd := ref.get(3, base + 1) >= 128;
                     for rr in 0 to hh - 1 loop
                         if bwd then r := hh - 1 - rr; else r := rr; end if;
+                        if op = 6 then sri := (r * sys) / 256; else sri := r; end if;
                         if twod then
-                            s0 := (src + r * ssi) mod 16777216; t0 := (dst + r * dsi) mod 16777216;
+                            s0 := (src + sri * ssi) mod 16777216; t0 := (dst + r * dsi) mod 16777216;
                         else
                             s0 := src; t0 := dst;
                         end if;
@@ -441,7 +447,11 @@ begin
                                     ref_wr(dsp, t0 + di, tr);
                                 end if;
                             else
-                                val := ref_rd(ssp, s0 + i);
+                                if op = 6 then
+                                    val := ref_rd(ssp, s0 + (i * sxs) / 256);
+                                else
+                                    val := ref_rd(ssp, s0 + i);
+                                end if;
                                 if op = 0 or val /= tr then
                                     if op = 5 then
                                         val := tbl(val);
@@ -590,8 +600,8 @@ begin
 
         -- expand and masked expand
         rd(16#D05B#, v);
-        if v /= x"0B" then
-            fail("CAP_BLIT $" & hex(v) & ", want $0B");
+        if v /= x"0F" then
+            fail("CAP_BLIT $" & hex(v) & ", want $0F");
         end if;
         desc(0, 3, 2 + 1 * 4, 16#012345#, 16#06003#, 1003, fill => 16#A1#, tr => 16#B2#);
         run(0, "expand XRAM to VRAM, 1003 pixels");
@@ -630,6 +640,18 @@ begin
         run(3, "2D remap backwards, negative source stride");
         desc(0, 1, 2 * 4 + 16 + 64 + 128, 0, 16#063000#, 9, 5, 0, 16#FFF0#, fill => 16#E1#);
         run(0, "2D fill, mirrored, backwards, negative stride");
+        -- scaled copy: zoom in, zoom out, fractions, with mirror and backwards
+        desc(0, 6, 2 + 1 * 4 + 16, 16#030200#, 16#07800#, 70, 30, 40, 80, tr => 16#00#, xs => 16#0080#, ys => 16#0080#);
+        run(0, "2D scaled copy XRAM to VRAM, twice the size");
+        desc(1, 6, 1 + 2 * 4 + 16, 16#06000#, 16#064000#, 33, 13, 256, 40, tr => 16#13#, xs => 16#0233#, ys => 16#01C7#);
+        run(1, "2D scaled copy VRAM to XRAM, smaller by odd steps");
+        desc(2, 6, 0 + 1 * 4 + 16 + 64, 16#C400#, 16#07A00#, 50, 7, 16#FFD8#, 64, tr => 16#FF#, xs => 16#00C0#, ys => 16#0155#);
+        run(2, "2D scaled copy, mirrored, negative source stride", c64 => true);
+        desc(3, 6, 1 + 1 * 4 + 16 + 128, 16#07800#, 16#07810#, 40, 12, 80, 80, tr => 16#00#, xs => 16#00F0#, ys => 16#0100#);
+        run(3, "2D scaled copy backwards over itself");
+        desc(0, 6, 2 + 1 * 4, 16#030000#, 16#07C00#, 200, tr => 16#00#, xs => 16#0001#);
+        run(0, "scaled copy, step 1/256: one source byte");
+
         -- DMA_CMD bit 2 (lists, not built): nothing starts
         desc(0, 1, 1 * 4, 0, 16#07200#, 50, fill => 16#77#);
         wr(16#D05A#, 4);

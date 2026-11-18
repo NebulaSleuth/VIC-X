@@ -93,8 +93,11 @@
 --   (two more clocks a byte); bit 3 mirror and backwards (+1 bits 6-7):
 --   each byte's source and destination come from its row start and its
 --   pixel in the row (DM_SEEK finds the first, with a multiply for a
---   backwards 2D transfer).  Strides are signed on every build.  Not
---   built: lists in VRAM (DMA_CMD bit 2 starts nothing).
+--   backwards 2D transfer).  Strides are signed on every build.  Bit 2
+--   scaled copy (operation 6): source row (r * Y step) >> 8 and byte
+--   (x * X step) >> 8 (DM_SEEK works out each row's start from its number,
+--   for every operation).  Not built: lists in VRAM (DMA_CMD bit 2 starts
+--   nothing).
 --
 -- Reset
 --   reset locks VIC-X, clears CTRL, IRQ, the ports and the layer setup, and restores the
@@ -288,11 +291,13 @@ architecture rtl of vicx is
     constant HAS_EXPAND : boolean := HAS_DMA and CAP_BLIT(0) = '1';
     constant HAS_REMAP  : boolean := HAS_DMA and CAP_BLIT(1) = '1';
     constant HAS_DIR    : boolean := HAS_DMA and CAP_BLIT(3) = '1';
+    constant HAS_SCALED : boolean := HAS_DMA and CAP_BLIT(2) = '1';
     function blit_caps return std_logic_vector is
         variable c : std_logic_vector(7 downto 0) := x"00";
     begin
         if HAS_EXPAND then c(0) := '1'; end if;
         if HAS_REMAP then c(1) := '1'; end if;
+        if HAS_SCALED then c(2) := '1'; end if;
         if HAS_DIR then c(3) := '1'; end if;
         return c;
     end function;
@@ -304,6 +309,7 @@ architecture rtl of vicx is
     signal dsc_src, dsc_dst : d24_t := (others => (others => '0'));
     signal dsc_w, dsc_h, dsc_ss, dsc_ds : d16_t := (others => (others => '0'));
     signal dsc_tbl    : d24_t := (others => (others => '0'));   -- remap table (+21-+23)
+    signal dsc_xs, dsc_ys : d16_t := (others => (others => '0')); -- scaled steps (+24-+27)
     -- remap: the table, loaded from VRAM as the descriptor starts
     type lut_t is array (0 to 255) of std_logic_vector(7 downto 0);
     signal lut        : lut_t;
@@ -333,6 +339,9 @@ architecture rtl of vicx is
     signal dm_w, dm_i, dm_h, dm_r : unsigned(15 downto 0) := (others => '0');
     signal dm_x       : unsigned(15 downto 0) := (others => '0');  -- source pixel in the row
     signal dm_mir, dm_bwd : std_logic := '0';       -- mirror, backwards (+1 bits 6, 7)
+    signal dm_sc      : std_logic := '0';           -- scaled copy
+    signal dm_xs, dm_ys : unsigned(15 downto 0) := (others => '0');  -- its steps, 8.8
+    signal dm_s0, dm_t0 : unsigned(23 downto 0) := (others => '0');  -- source, destination
     signal dm_cvalid  : std_logic := '0';         -- read cache: 8 bytes at dm_ckey
     signal dm_ckey    : unsigned(21 downto 0) := (others => '0');
     signal dm_cdata   : std_logic_vector(63 downto 0) := (others => '0');
@@ -823,8 +832,9 @@ begin
         variable dskip   : boolean;                -- masked: not stored
         variable ta      : unsigned(24 downto 0);  -- remap table byte's SDRAM address
         variable sr, tr2 : unsigned(23 downto 0);  -- row starts
-        variable nx      : unsigned(15 downto 0);
         variable prod    : signed(32 downto 0);
+        variable ra, ri  : unsigned(15 downto 0);   -- row, source row
+        variable yp      : unsigned(31 downto 0);
         variable sdst    : unsigned(24 downto 0);  -- SDRAM address of the destination
         variable ssrc    : unsigned(24 downto 0);
         variable dkind   : natural range 0 to 3;   -- 0 nothing, 1 SDRAM, 2 regs, 3 low palette
@@ -888,6 +898,10 @@ begin
                     when 21 => dsc_tbl(q)(7 downto 0)   <= unsigned(d);
                     when 22 => dsc_tbl(q)(15 downto 8)  <= unsigned(d);
                     when 23 => dsc_tbl(q)(23 downto 16) <= unsigned(d);
+                    when 24 => dsc_xs(q)(7 downto 0)  <= unsigned(d);
+                    when 25 => dsc_xs(q)(15 downto 8) <= unsigned(d);
+                    when 26 => dsc_ys(q)(7 downto 0)  <= unsigned(d);
+                    when 27 => dsc_ys(q)(15 downto 8) <= unsigned(d);
                     when others => null;
                 end case;
             end if;
@@ -897,19 +911,21 @@ begin
         -- (expand: a source byte per 8 pixels; mirror: x goes to w - 1 - x)
         procedure dm_pos(sr, tr : unsigned(23 downto 0); x : unsigned(15 downto 0)) is
             variable so, dof : unsigned(15 downto 0);
+            variable xp      : unsigned(31 downto 0);
         begin
-            if dm_ex = '1' then so := shift_right(x, 3); else so := x; end if;
+            xp := x * dm_xs;
+            if dm_ex = '1' then
+                so := shift_right(x, 3);
+            elsif HAS_SCALED and dm_sc = '1' then
+                so := xp(23 downto 8);              -- scaled: (x * X step) >> 8
+            else
+                so := x;
+            end if;
             if dm_mir = '1' then dof := dm_w - 1 - x; else dof := x; end if;
             dm_s <= sr + resize(so, 24);
             dm_t <= tr + resize(dof, 24);
             dm_x <= x;
         end procedure;
-
-        -- a stride, signed, to 24 bits
-        function sx24(v : unsigned(15 downto 0)) return unsigned is
-        begin
-            return unsigned(resize(signed(v), 24));
-        end function;
 
         -- where a DMA address in a space goes: kind and SDRAM address
         procedure dm_map(sp : std_logic_vector(1 downto 0); da : unsigned(23 downto 0);
@@ -1269,6 +1285,11 @@ begin
                             dm_irqp <= '1';
                         end if;
                         dm_op   <= dsc_op(dn)(2 downto 0);
+                        if dsc_op(dn) = x"06" then dm_sc <= '1'; else dm_sc <= '0'; end if;
+                        dm_xs   <= dsc_xs(dn);
+                        dm_ys   <= dsc_ys(dn);
+                        dm_s0   <= dsc_src(dn);
+                        dm_t0   <= dsc_dst(dn);
                         if dsc_op(dn) = x"03" or dsc_op(dn) = x"04" then
                             dm_ex <= '1';
                         else
@@ -1303,7 +1324,8 @@ begin
                         -- reserved operations and spaces, and empty transfers, do nothing
                         -- (and optional ones this build lacks: expand without
                         -- CAP_BLIT bit 0, the direction bits 6-7)
-                        if unsigned(dsc_op(dn)) > 5 or
+                        if unsigned(dsc_op(dn)) > 6 or
+                           (dsc_op(dn) = x"06" and not HAS_SCALED) or
                            (unsigned(dsc_op(dn)) > 2 and unsigned(dsc_op(dn)) < 5 and not HAS_EXPAND) or
                            (dsc_op(dn) = x"05" and not HAS_REMAP) or
                            (dsc_sp(dn)(7 downto 6) /= "00" and not HAS_DIR) or dsc_sp(dn)(3 downto 2) = "11" or
@@ -1320,16 +1342,17 @@ begin
                             dm_st  <= DM_SEEK;
                         end if;
 
-                    -- the first byte: backwards starts at the last row's last pixel
+                    -- each row's start, from its number: row ra (backwards: from
+                    -- the last); scaled: source row (ra * Y step) >> 8; then the
+                    -- row's first byte (backwards: its last pixel)
                     when DM_SEEK =>
-                        sr  := dm_srow;
-                        tr2 := dm_trow;
-                        if dm_bwd = '1' and dm_h > 1 then
-                            prod := signed('0' & (dm_h - 1)) * signed(dm_sst);
-                            sr   := dm_srow + unsigned(prod(23 downto 0));
-                            prod := signed('0' & (dm_h - 1)) * signed(dm_dst);
-                            tr2  := dm_trow + unsigned(prod(23 downto 0));
-                        end if;
+                        if dm_bwd = '1' then ra := dm_h - 1 - dm_r; else ra := dm_r; end if;
+                        yp := ra * dm_ys;
+                        if HAS_SCALED and dm_sc = '1' then ri := yp(23 downto 8); else ri := ra; end if;
+                        prod := signed('0' & ri) * signed(dm_sst);
+                        sr   := dm_s0 + unsigned(prod(23 downto 0));
+                        prod := signed('0' & ra) * signed(dm_dst);
+                        tr2  := dm_t0 + unsigned(prod(23 downto 0));
                         dm_srow <= sr;
                         dm_trow <= tr2;
                         if dm_bwd = '1' then
@@ -1337,8 +1360,8 @@ begin
                         else
                             dm_pos(sr, tr2, (others => '0'));
                         end if;
-                        if HAS_REMAP and dm_op = "101" then
-                            dm_st <= DM_TLOAD;
+                        if HAS_REMAP and dm_op = "101" and dm_r = 0 then
+                            dm_st <= DM_TLOAD;          -- the table, once
                         else
                             dm_st <= DM_BYTE;
                         end if;
@@ -1356,19 +1379,7 @@ begin
                             else
                                 dm_r    <= dm_r + 1;
                                 dm_i    <= (others => '0');
-                                -- strides are signed; backwards goes up the rows
-                                if dm_bwd = '1' then
-                                    sr  := dm_srow - sx24(dm_sst);
-                                    tr2 := dm_trow - sx24(dm_dst);
-                                    nx  := dm_w - 1;
-                                else
-                                    sr  := dm_srow + sx24(dm_sst);
-                                    tr2 := dm_trow + sx24(dm_dst);
-                                    nx  := (others => '0');
-                                end if;
-                                dm_srow <= sr;
-                                dm_trow <= tr2;
-                                dm_pos(sr, tr2, nx);
+                                dm_st   <= DM_SEEK;         -- the next row's start
                             end if;
                         else
                             dm_map(dm_ds, dm_t, dkind, sdst);
@@ -1543,8 +1554,8 @@ begin
                         end if;
                     end if;
                 end if;
-                if (dm_op = "010" or (dm_op = "101" and dsrcv)) and dval = dm_tr then
-                    dskip := true;                  -- masked copy, remap
+                if (dm_op = "010" or ((dm_op = "101" or dm_op = "110") and dsrcv)) and dval = dm_tr then
+                    dskip := true;                  -- masked copy, remap, scaled copy
                 end if;
                 -- remap: look the source byte up first (DM_LUT1, DM_LUT2)
                 if HAS_REMAP and dput and dsrcv and dm_op = "101" and not dskip then
@@ -1801,6 +1812,8 @@ begin
                 dsc_tr    <= (others => (others => '0'));
                 dsc_next  <= (others => (others => '0'));
                 dsc_tbl   <= (others => (others => '0'));
+                dsc_xs    <= (others => (others => '0'));
+                dsc_ys    <= (others => (others => '0'));
                 dsc_src   <= (others => (others => '0'));
                 dsc_dst   <= (others => (others => '0'));
                 dsc_w     <= (others => (others => '0'));
