@@ -60,8 +60,9 @@ Blitter options (spec: optional per target, CAP_BLIT at `$D05B`): the
 `CAP_BLIT` generic picks them. Done: expand and masked expand (bit 0),
 remap (bit 1: the table is loaded into a 256-byte block RAM as the
 descriptor starts), scaled copy (bit 2), mirror and backwards (bit 3);
-strides are signed; `tb_vicx_dma` checks them against VICE's `dma_run`.
-Not yet: lists in VRAM.
+strides are signed; lists in VRAM (bit 4: each entry fetched through the
+read cache into a fifth descriptor slot). `tb_vicx_dma` checks them all
+against VICE's `dma_run`.
 
 Wide window: done. The block counts pixels from the line's start and
 learns where the 320x200 area begins from the VIC-II, so the edges can move

@@ -96,8 +96,9 @@
 --   backwards 2D transfer).  Strides are signed on every build.  Bit 2
 --   scaled copy (operation 6): source row (r * Y step) >> 8 and byte
 --   (x * X step) >> 8 (DM_SEEK works out each row's start from its number,
---   for every operation).  Not built: lists in VRAM (DMA_CMD bit 2 starts
---   nothing).
+--   for every operation).  Bit 4 lists in VRAM (DMA_CMD bit 2): each
+--   entry's bytes 0-27 come through the read cache into a fifth descriptor
+--   slot (4) as its turn comes, and it runs from there.
 --
 -- Reset
 --   reset locks VIC-X, clears CTRL, IRQ, the ports and the layer setup, and restores the
@@ -292,6 +293,7 @@ architecture rtl of vicx is
     constant HAS_REMAP  : boolean := HAS_DMA and CAP_BLIT(1) = '1';
     constant HAS_DIR    : boolean := HAS_DMA and CAP_BLIT(3) = '1';
     constant HAS_SCALED : boolean := HAS_DMA and CAP_BLIT(2) = '1';
+    constant HAS_LIST   : boolean := HAS_DMA and CAP_BLIT(4) = '1';
     function blit_caps return std_logic_vector is
         variable c : std_logic_vector(7 downto 0) := x"00";
     begin
@@ -299,11 +301,13 @@ architecture rtl of vicx is
         if HAS_REMAP then c(1) := '1'; end if;
         if HAS_SCALED then c(2) := '1'; end if;
         if HAS_DIR then c(3) := '1'; end if;
+        if HAS_LIST then c(4) := '1'; end if;
         return c;
     end function;
-    type d8_t  is array (0 to 3) of std_logic_vector(7 downto 0);
-    type d16_t is array (0 to 3) of unsigned(15 downto 0);
-    type d24_t is array (0 to 3) of unsigned(23 downto 0);
+    -- descriptors 0-3, and 4: the list entry being run
+    type d8_t  is array (0 to 4) of std_logic_vector(7 downto 0);
+    type d16_t is array (0 to 4) of unsigned(15 downto 0);
+    type d24_t is array (0 to 4) of unsigned(23 downto 0);
     -- the four descriptors at $20880, as written (the fields the engine uses)
     signal dsc_op, dsc_sp, dsc_fill, dsc_tr, dsc_next : d8_t := (others => (others => '0'));
     signal dsc_src, dsc_dst : d24_t := (others => (others => '0'));
@@ -320,13 +324,21 @@ architecture rtl of vicx is
     signal dm_ti      : unsigned(8 downto 0) := (others => '0');
     type dmst_t is (DM_IDLE, DM_START, DM_BYTE, DM_RWAIT, DM_RRD, DM_RR1, DM_RR2,
                   DM_PUT, DM_FLUSH, DM_WWAIT, DM_NEXT,
-                  DM_TLOAD, DM_TWAIT, DM_LUT1, DM_LUT2, DM_SEEK);
+                  DM_TLOAD, DM_TWAIT, DM_LUT1, DM_LUT2, DM_SEEK,
+                  DM_LFETCH, DM_LWAIT);
     signal dm_st      : dmst_t := DM_IDLE;
     signal dm_ret     : dmst_t := DM_IDLE;          -- where a flush goes back to
     signal dm_busy    : std_logic := '0';
     signal dm_c64     : std_logic := '0';
-    signal dm_n       : natural range 0 to 3 := 0;
-    signal dm_ran     : std_logic_vector(3 downto 0) := (others => '0');
+    signal dm_n       : natural range 0 to 4 := 0;
+    signal dm_ran     : std_logic_vector(4 downto 0) := (others => '0');
+    -- lists in VRAM: the list address ($2085C-$2085E, as last written), and
+    -- while one runs: the entry's address, how many ran, the byte fetched
+    signal dm_lreg    : unsigned(23 downto 0) := (others => '0');
+    signal dm_list    : std_logic := '0';
+    signal dm_la      : unsigned(23 downto 0) := (others => '0');
+    signal dm_lc      : unsigned(11 downto 0) := (others => '0');
+    signal dm_lk      : unsigned(4 downto 0) := (others => '0');
     signal dm_irqp    : std_logic := '0';
     signal dm_op      : std_logic_vector(2 downto 0) := "000";
     signal dm_ex      : std_logic := '0';           -- expand or masked expand
@@ -843,7 +855,7 @@ begin
         variable wb      : std_logic_vector(15 downto 0);
         variable wbe     : std_logic_vector(1 downto 0);
         variable wbv     : std_logic_vector(7 downto 0);
-        variable dn      : natural range 0 to 3;
+        variable dn      : natural range 0 to 4;
         variable rbusy   : boolean;                -- the register-space write port is taken
         variable rqn     : natural range 0 to 2;
         variable k0, k1  : rqk_t;
@@ -852,6 +864,41 @@ begin
 
         -- a store to the register space (CPU port or DMA): what the display
         -- and the DMA engine keep copies of
+        -- descriptor q's field at byte off
+        procedure dsc_put(q : natural range 0 to 4; off : natural range 0 to 31;
+                          d : std_logic_vector(7 downto 0)) is
+        begin
+            case off is
+                when 0  => dsc_op(q) <= d;
+                when 1  => dsc_sp(q) <= d;
+                when 2  => dsc_src(q)(7 downto 0)   <= unsigned(d);
+                when 3  => dsc_src(q)(15 downto 8)  <= unsigned(d);
+                when 4  => dsc_src(q)(23 downto 16) <= unsigned(d);
+                when 6  => dsc_dst(q)(7 downto 0)   <= unsigned(d);
+                when 7  => dsc_dst(q)(15 downto 8)  <= unsigned(d);
+                when 8  => dsc_dst(q)(23 downto 16) <= unsigned(d);
+                when 10 => dsc_w(q)(7 downto 0)   <= unsigned(d);
+                when 11 => dsc_w(q)(15 downto 8)  <= unsigned(d);
+                when 12 => dsc_h(q)(7 downto 0)   <= unsigned(d);
+                when 13 => dsc_h(q)(15 downto 8)  <= unsigned(d);
+                when 14 => dsc_ss(q)(7 downto 0)  <= unsigned(d);
+                when 15 => dsc_ss(q)(15 downto 8) <= unsigned(d);
+                when 16 => dsc_ds(q)(7 downto 0)  <= unsigned(d);
+                when 17 => dsc_ds(q)(15 downto 8) <= unsigned(d);
+                when 18 => dsc_fill(q) <= d;
+                when 19 => dsc_tr(q)   <= d;
+                when 20 => dsc_next(q) <= d;
+                when 21 => dsc_tbl(q)(7 downto 0)   <= unsigned(d);
+                when 22 => dsc_tbl(q)(15 downto 8)  <= unsigned(d);
+                when 23 => dsc_tbl(q)(23 downto 16) <= unsigned(d);
+                when 24 => dsc_xs(q)(7 downto 0)  <= unsigned(d);
+                when 25 => dsc_xs(q)(15 downto 8) <= unsigned(d);
+                when 26 => dsc_ys(q)(7 downto 0)  <= unsigned(d);
+                when 27 => dsc_ys(q)(15 downto 8) <= unsigned(d);
+                when others => null;
+            end case;
+        end procedure;
+
         procedure regs_snoop(ra : unsigned(11 downto 0); d : std_logic_vector(7 downto 0)) is
             variable q : natural range 0 to 3;
         begin
@@ -874,37 +921,14 @@ begin
                 when others  => null;
             end case;
             if ra(11 downto 7) = "10001" then           -- DMA descriptors
-                q := to_integer(ra(6 downto 5));
-                case to_integer(ra(4 downto 0)) is
-                    when 0  => dsc_op(q) <= d;
-                    when 1  => dsc_sp(q) <= d;
-                    when 2  => dsc_src(q)(7 downto 0)   <= unsigned(d);
-                    when 3  => dsc_src(q)(15 downto 8)  <= unsigned(d);
-                    when 4  => dsc_src(q)(23 downto 16) <= unsigned(d);
-                    when 6  => dsc_dst(q)(7 downto 0)   <= unsigned(d);
-                    when 7  => dsc_dst(q)(15 downto 8)  <= unsigned(d);
-                    when 8  => dsc_dst(q)(23 downto 16) <= unsigned(d);
-                    when 10 => dsc_w(q)(7 downto 0)   <= unsigned(d);
-                    when 11 => dsc_w(q)(15 downto 8)  <= unsigned(d);
-                    when 12 => dsc_h(q)(7 downto 0)   <= unsigned(d);
-                    when 13 => dsc_h(q)(15 downto 8)  <= unsigned(d);
-                    when 14 => dsc_ss(q)(7 downto 0)  <= unsigned(d);
-                    when 15 => dsc_ss(q)(15 downto 8) <= unsigned(d);
-                    when 16 => dsc_ds(q)(7 downto 0)  <= unsigned(d);
-                    when 17 => dsc_ds(q)(15 downto 8) <= unsigned(d);
-                    when 18 => dsc_fill(q) <= d;
-                    when 19 => dsc_tr(q)   <= d;
-                    when 20 => dsc_next(q) <= d;
-                    when 21 => dsc_tbl(q)(7 downto 0)   <= unsigned(d);
-                    when 22 => dsc_tbl(q)(15 downto 8)  <= unsigned(d);
-                    when 23 => dsc_tbl(q)(23 downto 16) <= unsigned(d);
-                    when 24 => dsc_xs(q)(7 downto 0)  <= unsigned(d);
-                    when 25 => dsc_xs(q)(15 downto 8) <= unsigned(d);
-                    when 26 => dsc_ys(q)(7 downto 0)  <= unsigned(d);
-                    when 27 => dsc_ys(q)(15 downto 8) <= unsigned(d);
-                    when others => null;
-                end case;
+                dsc_put(to_integer(ra(6 downto 5)), to_integer(ra(4 downto 0)), d);
             end if;
+            case to_integer(ra) is                       -- the DMA list's address
+                when 16#85C# => dm_lreg(7 downto 0)   <= unsigned(d);
+                when 16#85D# => dm_lreg(15 downto 8)  <= unsigned(d);
+                when 16#85E# => dm_lreg(23 downto 16) <= unsigned(d);
+                when others  => null;
+            end case;
         end procedure;
 
         -- source pixel x of the rows starting at sr and tr: dm_s, dm_t
@@ -1188,14 +1212,24 @@ begin
                                 when 16#55# | 16#58# => win(off - 16#54#) <= "00000" & cpu_din(2 downto 0);
                                 when 16#56# | 16#59# => win(off - 16#54#) <= cpu_din(7) & "0000" & cpu_din(2 downto 0);
                                 when 16#5A# =>
-                                    -- DMA_CMD: start a chain; ignored while busy,
-                                    -- and with bit 2 (a list in VRAM: not built)
+                                    -- DMA_CMD: start a chain, or with bit 2 a list
+                                    -- in VRAM (where built); ignored while busy
                                     if HAS_DMA and dm_busy = '0' and cpu_din(2) = '0' then
                                         dm_busy <= '1';
+                                        dm_list <= '0';
                                         dm_n    <= to_integer(unsigned(cpu_din(1 downto 0)));
                                         dm_ran  <= (others => '0');
                                         dm_irqp <= '0';
                                         dm_st   <= DM_START;
+                                    elsif HAS_LIST and dm_busy = '0' then
+                                        dm_busy <= '1';
+                                        dm_list <= '1';
+                                        dm_la   <= dm_lreg;
+                                        dm_lc   <= (others => '0');
+                                        dm_lk   <= (others => '0');
+                                        dm_irqp <= '0';
+                                        dm_cvalid <= '0';
+                                        dm_st   <= DM_LFETCH;
                                     end if;
                                 when others => null;    -- read-only, reserved
                             end case;
@@ -1366,6 +1400,46 @@ begin
                             dm_st <= DM_BYTE;
                         end if;
 
+                    -- a list entry: bytes 0-27 from VRAM through the read cache
+                    -- into descriptor 4, then run it; an operation of $FF ends
+                    -- the list
+                    when DM_LFETCH =>
+                        if HAS_LIST then
+                            ta := to_unsigned(VRAM_BASE, 25) +
+                                  resize((dm_la + resize(dm_lk, 24)) mod VRAM_SIZE, 25);
+                            if dm_cvalid = '1' and dm_ckey = ta(24 downto 3) then
+                                if dm_lk = 0 and byte_of(dm_cdata, ta(2 downto 0)) = x"FF" then
+                                    dm_busy <= '0';
+                                    dm_list <= '0';
+                                    if dm_irqp = '1' then
+                                        irq_stat(1) <= '1';
+                                    end if;
+                                    dm_st <= DM_IDLE;
+                                else
+                                    dsc_put(4, to_integer(dm_lk), byte_of(dm_cdata, ta(2 downto 0)));
+                                    if dm_lk = 27 then
+                                        dm_n   <= 4;
+                                        dm_ran <= (others => '0');
+                                        dm_st  <= DM_START;
+                                    else
+                                        dm_lk <= dm_lk + 1;
+                                    end if;
+                                end if;
+                            else
+                                dmr_addr <= ta(24 downto 3) & "000";
+                                dmr_we   <= '0';
+                                dmr_req  <= '1';
+                                dm_ckey  <= ta(24 downto 3);
+                                dm_st    <= DM_LWAIT;
+                            end if;
+                        end if;
+                    when DM_LWAIT =>
+                        if dmok then
+                            dm_cdata  <= vx_rdata;
+                            dm_cvalid <= '1';
+                            dm_st     <= DM_LFETCH;
+                        end if;
+
                     when DM_BYTE =>
                         if dm_i = dm_w then
                             -- end of a row
@@ -1529,7 +1603,22 @@ begin
                     when DM_NEXT =>
                         dm_c64 <= '0';
                         dn := dm_n;
-                        if unsigned(dsc_next(dn)) < 4 and
+                        if HAS_LIST and dm_list = '1' then
+                            -- the next entry, unless 4096 have run
+                            dm_la <= dm_la + 32;
+                            dm_lc <= dm_lc + 1;
+                            dm_lk <= (others => '0');
+                            if dm_lc = 4095 then
+                                dm_busy <= '0';
+                                dm_list <= '0';
+                                if dm_irqp = '1' then
+                                    irq_stat(1) <= '1';
+                                end if;
+                                dm_st <= DM_IDLE;
+                            else
+                                dm_st <= DM_LFETCH;
+                            end if;
+                        elsif unsigned(dsc_next(dn)) < 4 and
                            dm_ran(to_integer(unsigned(dsc_next(dn)(1 downto 0)))) = '0' then
                             dm_n  <= to_integer(unsigned(dsc_next(dn)(1 downto 0)));
                             dm_st <= DM_START;

@@ -4,7 +4,7 @@
 -- fork's dma_run (src/vicx/vicx.c), and the memories are compared after it.
 -- Covers copy, fill, masked copy, expand and masked expand (CAP_BLIT bit 0),
 -- remap (bit 1), scaled copy (bit 2), mirror and backwards (bit 3) with
--- signed strides,
+-- signed strides, lists in VRAM (bit 4),
 -- straight and 2D, chains with the IRQ,
 -- the register space (palette entries 0-15 and above), XRAM wrapping,
 -- overlapping copies, reserved operations, starts while busy, the CPU halt,
@@ -136,7 +136,7 @@ begin
     end generate;
 
     dut : entity work.vicx
-        generic map (VRAM_BITS => 17, CAP_SPR => 0, CAP_SPRLINE => 0, CAP_FEAT => x"0A", CAP_BLIT => x"0F",
+        generic map (VRAM_BITS => 17, CAP_SPR => 0, CAP_SPRLINE => 0, CAP_FEAT => x"0A", CAP_BLIT => x"1F",
                      EXT_VRAM => true)
         port map (
             clk => clk, reset => reset,
@@ -365,8 +365,54 @@ begin
             end loop;
         end procedure;
 
+        -- list entry k at base: as desc(), but into VRAM through port 1
+        procedure lst(lb : natural; k : natural; op, spaces : natural; src, dst : natural;
+                      w : natural; hgt : natural := 0; ss : natural := 0; ds : natural := 0;
+                      fill : natural := 0; tr : natural := 0;
+                      tbl : natural := 0; xs : natural := 0; ys : natural := 0) is
+            variable b : desc_t := (others => 0);
+            variable a : natural;
+        begin
+            b(0) := op; b(1) := spaces;
+            for j in 0 to 3 loop
+                b(2 + j) := (src / (256 ** j)) mod 256;
+                b(6 + j) := (dst / (256 ** j)) mod 256;
+            end loop;
+            b(10) := w mod 256;   b(11) := w / 256;
+            b(12) := hgt mod 256; b(13) := hgt / 256;
+            b(14) := ss mod 256;  b(15) := ss / 256;
+            b(16) := ds mod 256;  b(17) := ds / 256;
+            b(18) := fill; b(19) := tr; b(20) := 255;
+            b(21) := tbl mod 256; b(22) := (tbl / 256) mod 256; b(23) := (tbl / 65536) mod 256;
+            b(24) := xs mod 256; b(25) := xs / 256; b(26) := ys mod 256; b(27) := ys / 256;
+            for j in 0 to 31 loop
+                a := (lb + 32 * k + j) mod VRAM_SZ;
+                port_set(1, a);
+                wr(16#D053#, b(j), 4);
+                ref.put(1, a, b(j));
+            end loop;
+        end procedure;
+
+        procedure lst_end(lb : natural; k : natural) is
+            variable a : natural;
+        begin
+            a := (lb + 32 * k) mod VRAM_SZ;
+            port_set(1, a);
+            wr(16#D053#, 255, 4);
+            ref.put(1, a, 255);
+        end procedure;
+
+        procedure list_at(la : natural) is
+        begin
+            port_set(1, 16#2085C#);
+            for j in 0 to 2 loop
+                wr(16#D053#, (la / (256 ** j)) mod 256, 4);
+                ref.put(3, 16#85C# + j, (la / (256 ** j)) mod 256);
+            end loop;
+        end procedure;
+
         -- run descriptor n (and its chain) on the reference, as dma_start does
-        procedure ref_run(n0 : natural; irq_want : out boolean) is
+        procedure ref_run(n0 : natural; irq_want : out boolean; list : boolean := false) is
             variable n, op, ssp, dsp, src, dst, w, hh, sst, dst2, fill, tr, nxt : natural;
             variable ran : std_logic_vector(3 downto 0) := "0000";
             variable twod : boolean;
@@ -381,49 +427,66 @@ begin
             type tbl_t is array (0 to 255) of natural;
             variable tbl  : tbl_t;
             variable ta   : natural;
+            variable dd   : desc_t;                 -- the descriptor being run
+            variable la, lk : natural;              -- list: entry address, count
         begin
             irq_want := false;
             n := n0;
-            while n < 4 and ran(n) = '0' loop
-                ran(n) := '1';
-                base := 16#880# + 32 * n;
-                op  := ref.get(3, base);
-                ssp := ref.get(3, base + 1) mod 4;
-                dsp := (ref.get(3, base + 1) / 4) mod 4;
-                twod := (ref.get(3, base + 1) / 16) mod 2 = 1;
-                if (ref.get(3, base + 1) / 32) mod 2 = 1 then
+            la := ref.get(3, 16#85C#) + 256 * ref.get(3, 16#85D#) + 65536 * ref.get(3, 16#85E#);
+            lk := 0;
+            loop
+                if list then
+                    -- a list in VRAM: each entry read as its turn comes
+                    exit when lk >= 4096;
+                    for k in 0 to 31 loop
+                        dd(k) := ref.get(1, (la + k) mod VRAM_SZ);
+                    end loop;
+                    exit when dd(0) = 255;
+                else
+                    exit when n >= 4;
+                    exit when ran(n) = '1';
+                    ran(n) := '1';
+                    for k in 0 to 31 loop
+                        dd(k) := ref.get(3, 16#880# + 32 * n + k);
+                    end loop;
+                end if;
+                op  := dd(0);
+                ssp := dd(1) mod 4;
+                dsp := (dd(1) / 4) mod 4;
+                twod := (dd(1) / 16) mod 2 = 1;
+                if (dd(1) / 32) mod 2 = 1 then
                     irq_want := true;
                 end if;
-                src := ref.get(3, base + 2) + 256 * ref.get(3, base + 3) + 65536 * ref.get(3, base + 4);
-                dst := ref.get(3, base + 6) + 256 * ref.get(3, base + 7) + 65536 * ref.get(3, base + 8);
-                w   := ref.get(3, base + 10) + 256 * ref.get(3, base + 11);
+                src := dd(2) + 256 * dd(3) + 65536 * dd(4);
+                dst := dd(6) + 256 * dd(7) + 65536 * dd(8);
+                w   := dd(10) + 256 * dd(11);
                 if twod then
-                    hh := ref.get(3, base + 12) + 256 * ref.get(3, base + 13);
+                    hh := dd(12) + 256 * dd(13);
                 else
                     hh := 1;
                 end if;
-                sst  := ref.get(3, base + 14) + 256 * ref.get(3, base + 15);
-                dst2 := ref.get(3, base + 16) + 256 * ref.get(3, base + 17);
-                fill := ref.get(3, base + 18);
-                tr   := ref.get(3, base + 19);
-                nxt  := ref.get(3, base + 20);
+                sst  := dd(14) + 256 * dd(15);
+                dst2 := dd(16) + 256 * dd(17);
+                fill := dd(18);
+                tr   := dd(19);
+                nxt  := dd(20);
                 -- reserved: operations above 4, the direction bits (not built)
                 if op = 5 then                  -- the table, as it starts
-                    ta := ref.get(3, base + 21) + 256 * ref.get(3, base + 22) + 65536 * ref.get(3, base + 23);
+                    ta := dd(21) + 256 * dd(22) + 65536 * dd(23);
                     for k in 0 to 255 loop
                         tbl(k) := ref.get(1, (ta + k) mod VRAM_SZ);
                     end loop;
                 end if;
-                sxs := ref.get(3, base + 24) + 256 * ref.get(3, base + 25);
-                sys := ref.get(3, base + 26) + 256 * ref.get(3, base + 27);
+                sxs := dd(24) + 256 * dd(25);
+                sys := dd(26) + 256 * dd(27);
                 if not (op > 6 or dsp = 3 or (op /= 1 and ssp = 3)) then
                     -- signed strides; mirror: byte i to w - 1 - i; backwards:
                     -- last row first, each row from its last byte
                     ssi := sst; dsi := dst2;
                     if ssi >= 32768 then ssi := ssi - 65536; end if;
                     if dsi >= 32768 then dsi := dsi - 65536; end if;
-                    mir := (ref.get(3, base + 1) / 64) mod 2 = 1;
-                    bwd := ref.get(3, base + 1) >= 128;
+                    mir := (dd(1) / 64) mod 2 = 1;
+                    bwd := dd(1) >= 128;
                     for rr in 0 to hh - 1 loop
                         if bwd then r := hh - 1 - rr; else r := rr; end if;
                         if op = 6 then sri := (r * sys) / 256; else sri := r; end if;
@@ -462,7 +525,10 @@ begin
                         end loop;
                     end loop;
                 end if;
-                if nxt = 255 then
+                if list then
+                    la := la + 32;
+                    lk := lk + 1;
+                elsif nxt = 255 then
                     n := 4;
                 else
                     n := nxt;
@@ -472,7 +538,7 @@ begin
 
         -- start the chain at n, wait for busy to clear, compare everything
         procedure run(n : natural; what : string; c64 : boolean := false;
-                      check_regs : boolean := false) is
+                      check_regs : boolean := false; list : boolean := false) is
             variable irq_want : boolean;
             variable cycles   : natural := 0;
             variable bad      : natural := 0;
@@ -480,8 +546,12 @@ begin
             variable irq_was  : std_logic_vector(7 downto 0);
         begin
             wr(16#D04A#, 16#07#);                       -- clear IRQ_STAT
-            ref_run(n, irq_want);
-            wr(16#D05A#, n);
+            ref_run(n, irq_want, list);
+            if list then
+                wr(16#D05A#, 4 + n);                    -- bits 0-1 ignored
+            else
+                wr(16#D05A#, n);
+            end if;
             halted := false;
             loop
                 if cpu_halt = '1' then
@@ -600,8 +670,8 @@ begin
 
         -- expand and masked expand
         rd(16#D05B#, v);
-        if v /= x"0F" then
-            fail("CAP_BLIT $" & hex(v) & ", want $0F");
+        if v /= x"1F" then
+            fail("CAP_BLIT $" & hex(v) & ", want $1F");
         end if;
         desc(0, 3, 2 + 1 * 4, 16#012345#, 16#06003#, 1003, fill => 16#A1#, tr => 16#B2#);
         run(0, "expand XRAM to VRAM, 1003 pixels");
@@ -652,16 +722,29 @@ begin
         desc(0, 6, 2 + 1 * 4, 16#030000#, 16#07C00#, 200, tr => 16#00#, xs => 16#0001#);
         run(0, "scaled copy, step 1/256: one source byte");
 
-        -- DMA_CMD bit 2 (lists, not built): nothing starts
-        desc(0, 1, 1 * 4, 0, 16#07200#, 50, fill => 16#77#);
-        wr(16#D05A#, 4);
-        idle(400);
-        rd(16#D05A#, v);
-        if v(7) = '1' then
-            fail("DMA_CMD bit 2 started a transfer");
-        end if;
-        desc(0, 1, 1 * 4, 0, 0, 0);
-        run(0, "after DMA_CMD bit 2: nothing changed");
+        -- lists in VRAM: entries written through port 1 (and to the
+        -- reference), the list address at $2085C-$2085E
+        lst(16#09000#, 0, 1, 1 * 4, 0, 16#09400#, 40, fill => 16#21#);
+        lst(16#09000#, 1, 0, 1 + 1 * 4, 16#09400#, 16#09500#, 40);
+        lst(16#09000#, 2, 1, 1 * 4 + 32, 0, 16#09600#, 9, fill => 16#5C#);
+        lst(16#09000#, 3, 6, 2 + 1 * 4 + 16, 16#030200#, 16#09700#, 17, 5, 40, 64, tr => 16#00#, xs => 16#00A0#, ys => 16#0180#);
+        lst_end(16#09000#, 4);
+        list_at(16#09000#);
+        run(0, "list: fill, copy of it, IRQ, scaled copy", list => true);
+        -- an entry that changes the next one's fill value; a reserved one
+        lst(16#09800#, 0, 1, 1 * 4, 0, 16#09800# + 32 + 18, 1, fill => 16#99#);
+        lst(16#09800#, 1, 1, 1 * 4, 0, 16#09900#, 6, fill => 16#11#);
+        lst(16#09800#, 2, 7, 1 * 4, 0, 16#09A00#, 6, fill => 16#22#);
+        lst(16#09800#, 3, 1, 1 * 4, 0, 16#09B00#, 6, fill => 16#33#);
+        lst_end(16#09800#, 4);
+        list_at(16#09800#);
+        run(3, "list: an entry changes the next; a reserved one is skipped", list => true);
+        -- a list wrapping at the top of VRAM
+        lst(16#1FFF0#, 0, 1, 1 * 4, 0, 16#09C00#, 5, fill => 16#44#);
+        lst(16#1FFF0#, 1, 0, 0 + 1 * 4, 16#C000#, 16#09C10#, 30);
+        lst_end(16#1FFF0#, 2);
+        list_at(16#1FFF0#);
+        run(1, "list wrapping at the top of VRAM", c64 => true, list => true);
 
         -- a DMA write reaches a port's copy of its block
         port_set(0, 16#05000#);
