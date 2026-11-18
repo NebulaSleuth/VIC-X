@@ -90,9 +90,11 @@
 --   pixels, most significant bit first; bit 1 remap (operation 5): the
 --   256-byte table is read from VRAM through the read cache as the
 --   descriptor starts, into a block RAM, and each byte is looked up there
---   (two more clocks a byte).  The others are not built: a descriptor with
---   a direction bit (+1 bits 6-7), and DMA_CMD with bit 2 (a list in
---   VRAM), do nothing.
+--   (two more clocks a byte); bit 3 mirror and backwards (+1 bits 6-7):
+--   each byte's source and destination come from its row start and its
+--   pixel in the row (DM_SEEK finds the first, with a multiply for a
+--   backwards 2D transfer).  Strides are signed on every build.  Not
+--   built: lists in VRAM (DMA_CMD bit 2 starts nothing).
 --
 -- Reset
 --   reset locks VIC-X, clears CTRL, IRQ, the ports and the layer setup, and restores the
@@ -285,11 +287,13 @@ architecture rtl of vicx is
     constant HAS_DMA  : boolean := EXT_VRAM and CAP_FEAT(3) = '1';
     constant HAS_EXPAND : boolean := HAS_DMA and CAP_BLIT(0) = '1';
     constant HAS_REMAP  : boolean := HAS_DMA and CAP_BLIT(1) = '1';
+    constant HAS_DIR    : boolean := HAS_DMA and CAP_BLIT(3) = '1';
     function blit_caps return std_logic_vector is
         variable c : std_logic_vector(7 downto 0) := x"00";
     begin
         if HAS_EXPAND then c(0) := '1'; end if;
         if HAS_REMAP then c(1) := '1'; end if;
+        if HAS_DIR then c(3) := '1'; end if;
         return c;
     end function;
     type d8_t  is array (0 to 3) of std_logic_vector(7 downto 0);
@@ -310,7 +314,7 @@ architecture rtl of vicx is
     signal dm_ti      : unsigned(8 downto 0) := (others => '0');
     type dmst_t is (DM_IDLE, DM_START, DM_BYTE, DM_RWAIT, DM_RRD, DM_RR1, DM_RR2,
                   DM_PUT, DM_FLUSH, DM_WWAIT, DM_NEXT,
-                  DM_TLOAD, DM_TWAIT, DM_LUT1, DM_LUT2);
+                  DM_TLOAD, DM_TWAIT, DM_LUT1, DM_LUT2, DM_SEEK);
     signal dm_st      : dmst_t := DM_IDLE;
     signal dm_ret     : dmst_t := DM_IDLE;          -- where a flush goes back to
     signal dm_busy    : std_logic := '0';
@@ -327,6 +331,8 @@ architecture rtl of vicx is
     signal dm_s, dm_t, dm_srow, dm_trow : unsigned(23 downto 0) := (others => '0');
     signal dm_sst, dm_dst : unsigned(15 downto 0) := (others => '0');
     signal dm_w, dm_i, dm_h, dm_r : unsigned(15 downto 0) := (others => '0');
+    signal dm_x       : unsigned(15 downto 0) := (others => '0');  -- source pixel in the row
+    signal dm_mir, dm_bwd : std_logic := '0';       -- mirror, backwards (+1 bits 6, 7)
     signal dm_cvalid  : std_logic := '0';         -- read cache: 8 bytes at dm_ckey
     signal dm_ckey    : unsigned(21 downto 0) := (others => '0');
     signal dm_cdata   : std_logic_vector(63 downto 0) := (others => '0');
@@ -816,6 +822,9 @@ begin
         variable dsrcv   : boolean;                -- dval is a source byte
         variable dskip   : boolean;                -- masked: not stored
         variable ta      : unsigned(24 downto 0);  -- remap table byte's SDRAM address
+        variable sr, tr2 : unsigned(23 downto 0);  -- row starts
+        variable nx      : unsigned(15 downto 0);
+        variable prod    : signed(32 downto 0);
         variable sdst    : unsigned(24 downto 0);  -- SDRAM address of the destination
         variable ssrc    : unsigned(24 downto 0);
         variable dkind   : natural range 0 to 3;   -- 0 nothing, 1 SDRAM, 2 regs, 3 low palette
@@ -883,6 +892,24 @@ begin
                 end case;
             end if;
         end procedure;
+
+        -- source pixel x of the rows starting at sr and tr: dm_s, dm_t
+        -- (expand: a source byte per 8 pixels; mirror: x goes to w - 1 - x)
+        procedure dm_pos(sr, tr : unsigned(23 downto 0); x : unsigned(15 downto 0)) is
+            variable so, dof : unsigned(15 downto 0);
+        begin
+            if dm_ex = '1' then so := shift_right(x, 3); else so := x; end if;
+            if dm_mir = '1' then dof := dm_w - 1 - x; else dof := x; end if;
+            dm_s <= sr + resize(so, 24);
+            dm_t <= tr + resize(dof, 24);
+            dm_x <= x;
+        end procedure;
+
+        -- a stride, signed, to 24 bits
+        function sx24(v : unsigned(15 downto 0)) return unsigned is
+        begin
+            return unsigned(resize(signed(v), 24));
+        end function;
 
         -- where a DMA address in a space goes: kind and SDRAM address
         procedure dm_map(sp : std_logic_vector(1 downto 0); da : unsigned(23 downto 0);
@@ -1247,6 +1274,13 @@ begin
                         else
                             dm_ex <= '0';
                         end if;
+                        if HAS_DIR then
+                            dm_mir <= dsc_sp(dn)(6);
+                            dm_bwd <= dsc_sp(dn)(7);
+                        else
+                            dm_mir <= '0';
+                            dm_bwd <= '0';
+                        end if;
                         dm_ss   <= dsc_sp(dn)(1 downto 0);
                         dm_ds   <= dsc_sp(dn)(3 downto 2);
                         dm_fill <= dsc_fill(dn);
@@ -1272,7 +1306,7 @@ begin
                         if unsigned(dsc_op(dn)) > 5 or
                            (unsigned(dsc_op(dn)) > 2 and unsigned(dsc_op(dn)) < 5 and not HAS_EXPAND) or
                            (dsc_op(dn) = x"05" and not HAS_REMAP) or
-                           dsc_sp(dn)(7 downto 6) /= "00" or dsc_sp(dn)(3 downto 2) = "11" or
+                           (dsc_sp(dn)(7 downto 6) /= "00" and not HAS_DIR) or dsc_sp(dn)(3 downto 2) = "11" or
                            (dsc_op(dn) /= x"01" and dsc_sp(dn)(1 downto 0) = "11") or
                            dsc_w(dn) = 0 or (dsc_sp(dn)(4) = '1' and dsc_h(dn) = 0) then
                             dm_st <= DM_NEXT;
@@ -1281,13 +1315,32 @@ begin
                                (dsc_op(dn) /= x"01" and dsc_sp(dn)(1 downto 0) = "00") then
                                 dm_c64 <= '1';
                             end if;
-                            if HAS_REMAP and dsc_op(dn) = x"05" then
-                                dm_tbl <= dsc_tbl(dn);
-                                dm_ti  <= (others => '0');
-                                dm_st  <= DM_TLOAD;
-                            else
-                                dm_st <= DM_BYTE;
-                            end if;
+                            dm_tbl <= dsc_tbl(dn);
+                            dm_ti  <= (others => '0');
+                            dm_st  <= DM_SEEK;
+                        end if;
+
+                    -- the first byte: backwards starts at the last row's last pixel
+                    when DM_SEEK =>
+                        sr  := dm_srow;
+                        tr2 := dm_trow;
+                        if dm_bwd = '1' and dm_h > 1 then
+                            prod := signed('0' & (dm_h - 1)) * signed(dm_sst);
+                            sr   := dm_srow + unsigned(prod(23 downto 0));
+                            prod := signed('0' & (dm_h - 1)) * signed(dm_dst);
+                            tr2  := dm_trow + unsigned(prod(23 downto 0));
+                        end if;
+                        dm_srow <= sr;
+                        dm_trow <= tr2;
+                        if dm_bwd = '1' then
+                            dm_pos(sr, tr2, dm_w - 1);
+                        else
+                            dm_pos(sr, tr2, (others => '0'));
+                        end if;
+                        if HAS_REMAP and dm_op = "101" then
+                            dm_st <= DM_TLOAD;
+                        else
+                            dm_st <= DM_BYTE;
                         end if;
 
                     when DM_BYTE =>
@@ -1303,10 +1356,19 @@ begin
                             else
                                 dm_r    <= dm_r + 1;
                                 dm_i    <= (others => '0');
-                                dm_srow <= dm_srow + resize(dm_sst, 24);
-                                dm_trow <= dm_trow + resize(dm_dst, 24);
-                                dm_s    <= dm_srow + resize(dm_sst, 24);
-                                dm_t    <= dm_trow + resize(dm_dst, 24);
+                                -- strides are signed; backwards goes up the rows
+                                if dm_bwd = '1' then
+                                    sr  := dm_srow - sx24(dm_sst);
+                                    tr2 := dm_trow - sx24(dm_dst);
+                                    nx  := dm_w - 1;
+                                else
+                                    sr  := dm_srow + sx24(dm_sst);
+                                    tr2 := dm_trow + sx24(dm_dst);
+                                    nx  := (others => '0');
+                                end if;
+                                dm_srow <= sr;
+                                dm_trow <= tr2;
+                                dm_pos(sr, tr2, nx);
                             end if;
                         else
                             dm_map(dm_ds, dm_t, dkind, sdst);
@@ -1472,7 +1534,7 @@ begin
                 -- expand: the source byte's bit for this pixel (most
                 -- significant first) picks the fill or the transparent value
                 if HAS_EXPAND and dput and dsrcv and dm_ex = '1' then
-                    if dval(7 - to_integer(dm_i(2 downto 0))) = '1' then
+                    if dval(7 - to_integer(dm_x(2 downto 0))) = '1' then
                         dval := dm_fill;
                     else
                         dval := dm_tr;
@@ -1542,10 +1604,11 @@ begin
                         end case;
                     end if;
                     dm_i  <= dm_i + 1;
-                    if dm_ex = '0' or dm_i(2 downto 0) = "111" then
-                        dm_s <= dm_s + 1;               -- expand: a source byte per 8
+                    if dm_bwd = '1' then
+                        dm_pos(dm_srow, dm_trow, dm_x - 1);
+                    else
+                        dm_pos(dm_srow, dm_trow, dm_x + 1);
                     end if;
-                    dm_t  <= dm_t + 1;
                     dm_st <= DM_BYTE;
                 end if;
             end if;

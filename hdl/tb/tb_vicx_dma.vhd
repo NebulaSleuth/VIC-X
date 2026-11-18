@@ -3,7 +3,7 @@
 -- port; every transfer is also run on a reference that follows the VICE
 -- fork's dma_run (src/vicx/vicx.c), and the memories are compared after it.
 -- Covers copy, fill, masked copy, expand and masked expand (CAP_BLIT bit 0),
--- remap (bit 1),
+-- remap (bit 1), mirror and backwards (bit 3) with signed strides,
 -- straight and 2D, chains with the IRQ,
 -- the register space (palette entries 0-15 and above), XRAM wrapping,
 -- overlapping copies, reserved operations, starts while busy, the CPU halt,
@@ -135,7 +135,7 @@ begin
     end generate;
 
     dut : entity work.vicx
-        generic map (VRAM_BITS => 17, CAP_SPR => 0, CAP_SPRLINE => 0, CAP_FEAT => x"0A", CAP_BLIT => x"03",
+        generic map (VRAM_BITS => 17, CAP_SPR => 0, CAP_SPRLINE => 0, CAP_FEAT => x"0A", CAP_BLIT => x"0B",
                      EXT_VRAM => true)
         port map (
             clk => clk, reset => reset,
@@ -371,6 +371,9 @@ begin
             variable base : natural;
             variable val  : natural;
             variable s0, t0 : natural;
+            variable ssi, dsi : integer;            -- strides, signed
+            variable mir, bwd : boolean;
+            variable r, i, di : natural;
             variable bit1 : boolean;
             type tbl_t is array (0 to 255) of natural;
             variable tbl  : tbl_t;
@@ -408,24 +411,34 @@ begin
                         tbl(k) := ref.get(1, (ta + k) mod VRAM_SZ);
                     end loop;
                 end if;
-                if not (op > 5 or ref.get(3, base + 1) >= 64 or dsp = 3 or (op /= 1 and ssp = 3)) then
-                    for r in 0 to hh - 1 loop
+                if not (op > 5 or dsp = 3 or (op /= 1 and ssp = 3)) then
+                    -- signed strides; mirror: byte i to w - 1 - i; backwards:
+                    -- last row first, each row from its last byte
+                    ssi := sst; dsi := dst2;
+                    if ssi >= 32768 then ssi := ssi - 65536; end if;
+                    if dsi >= 32768 then dsi := dsi - 65536; end if;
+                    mir := (ref.get(3, base + 1) / 64) mod 2 = 1;
+                    bwd := ref.get(3, base + 1) >= 128;
+                    for rr in 0 to hh - 1 loop
+                        if bwd then r := hh - 1 - rr; else r := rr; end if;
                         if twod then
-                            s0 := src + r * sst; t0 := dst + r * dst2;
+                            s0 := (src + r * ssi) mod 16777216; t0 := (dst + r * dsi) mod 16777216;
                         else
                             s0 := src; t0 := dst;
                         end if;
-                        for i in 0 to w - 1 loop
+                        for ii in 0 to w - 1 loop
+                            if bwd then i := w - 1 - ii; else i := ii; end if;
+                            if mir then di := w - 1 - i; else di := i; end if;
                             if op = 1 then
-                                ref_wr(dsp, t0 + i, fill);
+                                ref_wr(dsp, t0 + di, fill);
                             elsif op = 3 or op = 4 then
                                 -- expand: bit 7 - i mod 8 of source byte i / 8
                                 val  := ref_rd(ssp, s0 + i / 8);
                                 bit1 := (val / 2 ** (7 - i mod 8)) mod 2 = 1;
                                 if bit1 then
-                                    ref_wr(dsp, t0 + i, fill);
+                                    ref_wr(dsp, t0 + di, fill);
                                 elsif op = 3 then
-                                    ref_wr(dsp, t0 + i, tr);
+                                    ref_wr(dsp, t0 + di, tr);
                                 end if;
                             else
                                 val := ref_rd(ssp, s0 + i);
@@ -433,7 +446,7 @@ begin
                                     if op = 5 then
                                         val := tbl(val);
                                     end if;
-                                    ref_wr(dsp, t0 + i, val);
+                                    ref_wr(dsp, t0 + di, val);
                                 end if;
                             end if;
                         end loop;
@@ -577,8 +590,8 @@ begin
 
         -- expand and masked expand
         rd(16#D05B#, v);
-        if v /= x"03" then
-            fail("CAP_BLIT $" & hex(v) & ", want $03");
+        if v /= x"0B" then
+            fail("CAP_BLIT $" & hex(v) & ", want $0B");
         end if;
         desc(0, 3, 2 + 1 * 4, 16#012345#, 16#06003#, 1003, fill => 16#A1#, tr => 16#B2#);
         run(0, "expand XRAM to VRAM, 1003 pixels");
@@ -598,9 +611,26 @@ begin
         desc(3, 5, 1 + 1 * 4, 16#06700#, 16#01F03#, 200, tr => 16#13#, tbl => 16#01F03#);
         run(3, "remap into its own table");
 
-        -- a direction bit (not built): nothing; DMA_CMD bit 2: nothing starts
+        -- mirror (+64) and backwards (+128), signed strides
         desc(0, 0, 2 + 1 * 4 + 64, 16#012345#, 16#07100#, 50);
-        run(0, "copy with the mirror bit: nothing");
+        run(0, "mirrored copy XRAM to VRAM");
+        desc(1, 0, 1 + 1 * 4 + 128, 16#07100#, 16#07103#, 40);
+        run(1, "backwards copy over itself, 3 bytes right");
+        desc(2, 0, 1 + 1 * 4, 16#07100#, 16#070FE#, 40);
+        run(2, "forwards copy over itself, 2 bytes left");
+        desc(3, 0, 1 + 1 * 4 + 16 + 128, 16#07000#, 16#07040#, 29, 11, 64, 64);
+        run(3, "2D backwards copy, rows overlapping");
+        desc(0, 0, 2 + 1 * 4 + 16, 16#030000#, 16#07FC0#, 37, 9, 16#FEC0#, 16#FFC0#);
+        run(0, "2D copy, both strides negative");
+        desc(1, 3, 0 + 1 * 4 + 16 + 64, 16#C300#, 16#07400#, 21, 5, 3, 16#FFE0#, fill => 16#6B#, tr => 16#7C#);
+        run(1, "2D mirrored expand, negative destination stride", c64 => true);
+        desc(2, 4, 1 + 2 * 4 + 16 + 64 + 128, 16#00F00#, 16#062000#, 37, 6, 5, 40, fill => 16#91#);
+        run(2, "2D masked expand, mirrored and backwards, to XRAM");
+        desc(3, 5, 2 + 1 * 4 + 16 + 128, 16#020100#, 16#07600#, 33, 4, 16#FF00#, 64, tr => 16#00#, tbl => 16#01F03#);
+        run(3, "2D remap backwards, negative source stride");
+        desc(0, 1, 2 * 4 + 16 + 64 + 128, 0, 16#063000#, 9, 5, 0, 16#FFF0#, fill => 16#E1#);
+        run(0, "2D fill, mirrored, backwards, negative stride");
+        -- DMA_CMD bit 2 (lists, not built): nothing starts
         desc(0, 1, 1 * 4, 0, 16#07200#, 50, fill => 16#77#);
         wr(16#D05A#, 4);
         idle(400);
