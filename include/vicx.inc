@@ -97,6 +97,7 @@ VICX_LAYER0     = $20800        ; 32 bytes
 VICX_LAYER1     = $20820        ; 32 bytes
 VICX_MIXSETUP   = $20840        ; layer order and sprite engine setup
 VICX_DMADESC    = $20880        ; 4 descriptors x 32 bytes
+VICX_DMALIST    = $2085C        ; a DMA list's address in VRAM (3 bytes; optional)
 VICX_COLLIST    = $20900        ; collision list
 
 ; --- Layer setup (32 bytes per layer at VICX_LAYER0 / VICX_LAYER1) -------
