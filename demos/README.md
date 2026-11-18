@@ -96,6 +96,15 @@ Fast-load cartridges are no way round this: they use the `$DE00-$DFFF` I/O
 area, where the REU (that is, XRAM) lives, and most of them only speed up a
 1541, not the 1581 that `gallery` and `bigworld` need.
 
+### On a MiSTer: one menu entry per demo
+
+`build.py` also writes `build/<demo>.mgl`, a MiSTer launcher that loads the
+C64X core, then `<demo>.reu` into the REU and `<demo>.prg`; the demo finds
+its data in XRAM and starts at once. Copy the demo files to
+`games/C64X/vicx-demos/` and the `.mgl` files to a folder whose name starts
+with `_` (for example `/media/fat/_VIC-X/`): each demo is then one entry in
+the MiSTer's main menu.
+
 ### On an Ultimate (U64, C64 Ultimate): the demo loads its REU image from USB
 
 On an Ultimate the demo loads `<demo>.reu` itself through the Ultimate

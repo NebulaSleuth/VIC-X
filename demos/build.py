@@ -374,6 +374,18 @@ def assemble(demo):
     return prg
 
 
+def mgl(demo):
+    """build/<demo>.mgl: a MiSTer launcher that loads the C64X core, then
+    <demo>.reu into the REU and <demo>.prg, from games/C64X/vicx-demos; the
+    demo finds its data already in XRAM and starts at once."""
+    (BUILD / f"{demo}.mgl").write_text(
+        "<mistergamedescription>\n"
+        "  <rbf>_Computer/C64X</rbf>\n"
+        f'  <file delay="2" type="f" index="1" path="vicx-demos/{demo}.reu"/>\n'
+        f'  <file delay="4" type="f" index="1" path="vicx-demos/{demo}.prg"/>\n'
+        "</mistergamedescription>\n", newline="\n")
+
+
 def disk(demo, prg):
     """build/<demo>.d64 (or .d81 when the data needs more than a 1541 disk):
     the PRG first, so it autostarts, then the data file."""
@@ -429,6 +441,7 @@ def main():
         used = pack(demo, DEMOS[demo])
         prg = assemble(demo)
         image = disk(demo, prg)
+        mgl(demo)
         print(f"{demo}: {prg.name}, {prg.stat().st_size} bytes; {demo}.reu uses {used} bytes; "
               f"{image.name} with {(BUILD / f'{demo}.dat').stat().st_size} bytes of packed data")
         if args.check:
