@@ -186,6 +186,7 @@ VICX_DMA_MASKED   = 2
 VICX_DMA_EXPAND   = 3             ; optional: CAP_BLIT bit 0
 VICX_DMA_EXPAND_MASKED = 4
 VICX_DMA_REMAP    = 5             ; optional: CAP_BLIT bit 1 (table at +21-+23)
+VICX_DMA_SCALED   = 6             ; optional: CAP_BLIT bit 2 (8.8 steps at +24-+27)
 VICX_DMA_SRC_C64  = $00         ; C64 RAM (64 KB, never ROM or I/O)
 VICX_DMA_SRC_VRAM = $01         ; the port address space: VRAM and registers
 VICX_DMA_SRC_XRAM = $02

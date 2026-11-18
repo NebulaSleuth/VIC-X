@@ -3,7 +3,7 @@
 ;
 ; Values in the VICE model: VERSION $01 (spec 0.1 draft), CAP_VRAM $10
 ; (128 KB), CAP_SPR $80 and CAP_SPRLINE $20 (the target limits), CAP_FEAT $1F
-; (all features since step 5), CAP_BLIT $0B (expand, remap, direction).  CAP_XRAM is the REU size in MB: 0 here,
+; (all features since step 5), CAP_BLIT $0F (expand, remap, scaled copy, direction).  CAP_XRAM is the REU size in MB: 0 here,
 ; since this run has no REU (t27 checks it with one).
 ;
 ; RUN: -vicx
