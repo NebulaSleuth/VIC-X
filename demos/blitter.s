@@ -18,6 +18,7 @@
 
 NEED_XRAM_MB = 2
 CPU_TEXT     = $0400 + 24 * 40 + 32     ; bottom row, right
+LD_IN        = $3800                    ; the loader's buffer, above the program
 .include "demo.inc"
 .include "assets.inc"
 .include "tables.inc"
@@ -27,6 +28,7 @@ CRED_X  = $101000               ; XRAM: the panel's lines, 360 bytes each
 ROMCOPY = $4000                 ; the ROM's first 64 glyphs (512 bytes)
 FONTBUF = $4200                 ; the 16x16 font while it is built (2 KB)
 LINEBUF = $4A00                 ; one panel line while it is built (360 bytes)
+.assert __MAIN_LAST__ <= ROMCOPY, lderror, "the program runs into the font buffers"
 
 STRIP_Y = 8                     ; the scroller's strip: rows 8-71
 STRIP_H = 64
@@ -41,6 +43,15 @@ EXPAND_FRAMES = 750             ; 15 s
 REMAP_FRAMES  = 600             ; 12 s
 GREY_TBL = $0FA00               ; VRAM: the remap table (above buffer 0)
 SPOT     = 80                   ; the spotlight's box
+DIR_FRAMES = 750                ; 15 s
+BOX_X   = 24                    ; the panorama box
+BOX_Y   = 12
+BOX_W   = 112
+BOX_H   = 56
+BOXB_X  = 184                   ; ... and its mirror image
+PAN_Y   = 110                   ; picture rows the panorama shows
+PAN_MAX = 320 - BOX_W
+LAKE_Y  = 96                    ; the reflection: rows 96-191
 CARD_FRAMES   = 150             ; 3 s
 
 ; zero page
@@ -77,6 +88,8 @@ d_tbl   = $39                   ; 3 bytes: the remap table (+21-+23)
 pvx     = $3C                   ; 2 bytes: spotlight left x per buffer, $FF none
 pvy     = $3E                   ; 2 bytes: ... and top y
 sa      = $40                   ; spotlight path position
+pp      = $41                   ; panorama: picture column at the box's left
+pdir    = $42                   ; 0: moving right (backwards copy), 1: left
 
 .code
 main:
@@ -160,8 +173,8 @@ scene:
 
 scene_bit: .byte VICX_BLIT_EXPAND, VICX_BLIT_REMAP, VICX_BLIT_SCALED
            .byte VICX_BLIT_DIRECTION, VICX_BLIT_LIST
-scene_lo:  .byte <expand_scene, <remap_scene, <card, <card, <card
-scene_hi:  .byte >expand_scene, >remap_scene, >card, >card, >card
+scene_lo:  .byte <expand_scene, <remap_scene, <card, <dir_scene, <card
+scene_hi:  .byte >expand_scene, >remap_scene, >card, >dir_scene, >card
 
 ; The scene's name on the bottom row (cols 0-30).
 show_name:
@@ -193,7 +206,7 @@ names:  .word nm_expand, nm_remap, nm_scaled, nm_dir, nm_list
 nm_expand: SCR "EXPAND AND MASKED EXPAND       "
 nm_remap:  SCR "REMAP                          "
 nm_scaled: SCR "SCALED COPY                    "
-nm_dir:    SCR "MIRROR AND BACKWARDS           "
+nm_dir:    SCR "MIRROR, BACKWARDS, NEG. STRIDE "
 nm_list:   SCR "LISTS IN VRAM                  "
 txt_card:  SCR "NOT IN THIS BUILD"
 
@@ -385,6 +398,275 @@ box_src:
         lda back
         sta d_dst + 2
         jmp dma_go
+
+; --- direction --------------------------------------------------------------
+; A box panning over the galaxy that scrolls over itself (moving right needs
+; the backwards bit, as source and destination overlap; moving left is a
+; plain copy), its mirror image beside it (the mirror bit), and the top half
+; reflected in the bottom half, upside down through a negative source stride,
+; in 24 bands of 4 rows that ripple.
+dir_scene:
+        jsr pic_both
+        lda #VICX_DMA_FILL              ; the lake starts black, both buffers
+        sta d_op
+        lda #VICX_DMA_DST_VRAM
+        sta d_fl
+        lda #0
+        sta d_fill
+        lda #<(LAKE_Y * 320)
+        sta d_dst
+        lda #>(LAKE_Y * 320)
+        sta d_dst + 1
+        lda #0
+        sta d_dst + 2
+        lda #<(96 * 320)
+        sta d_w
+        lda #>(96 * 320)
+        sta d_w + 1
+        jsr dma_go
+        inc d_dst + 2
+        jsr dma_go
+        ; the box: buffer 0 (shown) at PAN_MAX - 2, buffer 1 at PAN_MAX
+        lda back
+        pha
+        lda #0
+        sta back
+        lda #PAN_MAX - 2
+        jsr pan_box
+        lda #1
+        sta back
+        lda #PAN_MAX
+        jsr pan_box
+        pla
+        sta back
+        lda #PAN_MAX - 4
+        sta pp
+        lda #0
+        sta pdir
+        lda #<DIR_FRAMES
+        sta tmr
+        lda #>DIR_FRAMES
+        sta tmr + 1
+@lp:    jsr frame
+        jsr pan_step
+        jsr mirror_box
+        jsr lake
+        inc phase
+        lda #1
+        sta drawn
+        jsr cpu_end
+        jsr count
+        beq :+
+        jmp @lp
+:       rts
+
+; The whole box from picture column A, in the drawn buffer.
+pan_box:
+        sta cx
+        lda #0
+        sta cx + 1
+        lda #BOX_W
+        sta d_w
+        lda #BOX_X
+        jmp pan_cols
+
+; Copy d_w columns of the picture (rows PAN_Y...), from column cx, to the box
+; at column A of the drawn buffer.
+pan_cols:
+        tax
+        lda #BOX_Y
+        jsr dst_at
+        lda #0
+        sta d_w + 1
+        lda #BOX_H
+        sta d_h
+        lda #VICX_DMA_COPY
+        sta d_op
+        lda #VICX_DMA_SRC_XRAM | VICX_DMA_DST_VRAM | VICX_DMA_2D
+        sta d_fl
+        lda #<320
+        sta d_ss
+        sta d_ds
+        lda #>320
+        sta d_ss + 1
+        sta d_ds + 1
+        lda #<(SPACE_PIX + PAN_Y * 320)
+        clc
+        adc cx
+        sta d_src
+        lda #>(SPACE_PIX + PAN_Y * 320)
+        adc cx + 1
+        sta d_src + 1
+        lda #^(SPACE_PIX + PAN_Y * 320)
+        adc #0
+        sta d_src + 2
+        jmp dma_go
+
+; This buffer's box last showed the picture from pp + 4 (moving right) or
+; pp - 4 (moving left): move it 4 pixels over itself, then the 4 new columns.
+pan_step:
+        lda #VICX_DMA_COPY
+        sta d_op
+        lda #0
+        sta d_w + 1
+        lda #BOX_W - 4
+        sta d_w
+        lda #BOX_H
+        sta d_h
+        lda #<320
+        sta d_ss
+        sta d_ds
+        lda #>320
+        sta d_ss + 1
+        sta d_ds + 1
+        lda pdir
+        bne @left
+        ; right: box[0..w-5] -> box[4..w-1], last byte first
+        lda #VICX_DMA_SRC_VRAM | VICX_DMA_DST_VRAM | VICX_DMA_2D | VICX_DMA_BACKWARD
+        sta d_fl
+        lda #BOX_Y
+        ldx #BOX_X
+        jsr dst_at
+        jsr dst_to_src
+        lda #BOX_Y
+        ldx #BOX_X + 4
+        jsr dst_at
+        jsr dma_go
+        lda pp                          ; the new columns on the left
+        sta cx
+        lda #0
+        sta cx + 1
+        lda #4
+        sta d_w
+        lda #BOX_X
+        jsr pan_cols
+        dec pp
+        dec pp
+        bne :+
+        inc pdir                        ; at the left end: turn
+:       rts
+@left:  ; left: box[4..w-1] -> box[0..w-5], first byte first
+        lda #VICX_DMA_SRC_VRAM | VICX_DMA_DST_VRAM | VICX_DMA_2D
+        sta d_fl
+        lda #BOX_Y
+        ldx #BOX_X + 4
+        jsr dst_at
+        jsr dst_to_src
+        lda #BOX_Y
+        ldx #BOX_X
+        jsr dst_at
+        jsr dma_go
+        lda pp                          ; the new columns on the right
+        clc
+        adc #BOX_W - 4
+        sta cx
+        lda #0
+        adc #0
+        sta cx + 1
+        lda #4
+        sta d_w
+        lda #BOX_X + BOX_W - 4
+        jsr pan_cols
+        inc pp
+        inc pp
+        lda pp
+        cmp #PAN_MAX
+        bcc :+
+        lda #0
+        sta pdir                        ; at the right end: turn
+:       rts
+
+dst_to_src:
+        lda d_dst
+        sta d_src
+        lda d_dst + 1
+        sta d_src + 1
+        lda d_dst + 2
+        sta d_src + 2
+        rts
+
+; Box B = box A mirrored: one copy with the mirror bit.
+mirror_box:
+        lda #VICX_DMA_COPY
+        sta d_op
+        lda #VICX_DMA_SRC_VRAM | VICX_DMA_DST_VRAM | VICX_DMA_2D | VICX_DMA_MIRROR
+        sta d_fl
+        lda #BOX_W
+        sta d_w
+        lda #0
+        sta d_w + 1
+        lda #BOX_H
+        sta d_h
+        lda #BOX_Y
+        ldx #BOX_X
+        jsr dst_at
+        jsr dst_to_src
+        lda #BOX_Y
+        ldx #BOXB_X
+        jsr dst_at
+        jmp dma_go
+
+; The lake: band k (rows LAKE_Y + 4k...) from rows 95 - 4k upwards (source
+; stride -320), shifted by a ripple of 1-7 pixels.
+lake:   lda #VICX_DMA_COPY
+        sta d_op
+        lda #VICX_DMA_SRC_VRAM | VICX_DMA_DST_VRAM | VICX_DMA_2D
+        sta d_fl
+        lda #<312
+        sta d_w
+        lda #>312
+        sta d_w + 1
+        lda #4
+        sta d_h
+        lda #<(-320)
+        sta d_ss
+        lda #>(-320)
+        sta d_ss + 1
+        lda #<320
+        sta d_ds
+        lda #>320
+        sta d_ds + 1
+        lda #0
+        sta t2                          ; band
+@band:  lda t2                          ; ripple: 1 + sine / 8
+        asl
+        asl
+        asl
+        asl
+        clc
+        adc phase
+        adc phase
+        tax
+        lda sine,x                      ; 0-48
+        lsr
+        lsr
+        lsr                             ; 0-6
+        clc
+        adc #1
+        sta t1                          ; source column
+        lda t2                          ; source row: 95 - 4k
+        asl
+        asl
+        sta t0
+        lda #LAKE_Y - 1
+        sec
+        sbc t0
+        ldx t1
+        jsr dst_at
+        jsr dst_to_src
+        lda t2
+        asl
+        asl
+        clc
+        adc #LAKE_Y
+        ldx #4
+        jsr dst_at
+        jsr dma_go
+        inc t2
+        lda t2
+        cmp #24
+        bne @band
+        rts
 
 ; --- a scene this build lacks --------------------------------------------------
 ; The panel in plain blue in both buffers, NOT IN THIS BUILD over it.
