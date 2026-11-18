@@ -276,6 +276,33 @@ def blitter_tables(path):
     for (r, g, b) in pal:
         lines.append(f"        .byte {r}, {g}, {b}, 0")
     lines.append(f"PAL_EXTRA_N = {len(pal)}")
+    # remap: the picture's 192 colours (entries 16-207) to 32 dim greys at
+    # 208-239; every other entry to itself
+    spal = (BUILD / "space.pal").read_bytes()
+    grey = list(range(256))
+    for k in range(192):
+        r, g, b = spal[4 * k:4 * k + 3]
+        y = (299 * r + 587 * g + 114 * b) / 1000
+        grey[16 + k] = 208 + min(31, int(y * 32 / 256))
+    lines.append("grey_table:                     ; the remap table")
+    for i in range(0, 256, 16):
+        lines.append("        .byte " + ", ".join(str(v) for v in grey[i:i + 16]))
+    lines.append("grey_pal:                       ; entries 208-239: dim greys")
+    for k in range(32):
+        v = int(k * 150 / 31)
+        lines.append(f"        .byte {v}, {v}, {v + 8 if v < 247 else v}, 0")
+    # the spotlight: half-widths of ten bands of 8 rows, radius 40
+    lines.append("spot_hw:")
+    lines.append("        .byte " + ", ".join(
+        str(int(math.sqrt(max(0, 40 ** 2 - (-36 + 8 * k) ** 2)))) for k in range(10)))
+    lines.append("spot_x:                         ; centre x - 40, 256 steps")
+    for i in range(0, 256, 16):
+        lines.append("        .byte " + ", ".join(
+            str(int(120 + 100 * math.sin(2 * math.pi * a / 256))) for a in range(i, i + 16)))
+    lines.append("spot_y:                         ; centre y - 40")
+    for i in range(0, 256, 16):
+        lines.append("        .byte " + ", ".join(
+            str(int(56 + 50 * math.sin(2 * math.pi * 2 * a / 256 + 1))) for a in range(i, i + 16)))
     path.write_text("\n".join(lines) + "\n", newline="\n")
 
 

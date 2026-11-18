@@ -38,6 +38,9 @@ PANEL_BG = 240
 LINE_COL = 241                  ; 241-248
 RAINBOW = 208                   ; 208-239
 EXPAND_FRAMES = 750             ; 15 s
+REMAP_FRAMES  = 600             ; 12 s
+GREY_TBL = $0FA00               ; VRAM: the remap table (above buffer 0)
+SPOT     = 80                   ; the spotlight's box
 CARD_FRAMES   = 150             ; 3 s
 
 ; zero page
@@ -70,6 +73,10 @@ cx      = $33                   ; 2 bytes
 scn     = $35                   ; scene number
 drawn   = $36
 lb      = $37                   ; 2 bytes
+d_tbl   = $39                   ; 3 bytes: the remap table (+21-+23)
+pvx     = $3C                   ; 2 bytes: spotlight left x per buffer, $FF none
+pvy     = $3E                   ; 2 bytes: ... and top y
+sa      = $40                   ; spotlight path position
 
 .code
 main:
@@ -153,8 +160,8 @@ scene:
 
 scene_bit: .byte VICX_BLIT_EXPAND, VICX_BLIT_REMAP, VICX_BLIT_SCALED
            .byte VICX_BLIT_DIRECTION, VICX_BLIT_LIST
-scene_lo:  .byte <expand_scene, <card, <card, <card, <card
-scene_hi:  .byte >expand_scene, >card, >card, >card, >card
+scene_lo:  .byte <expand_scene, <remap_scene, <card, <card, <card
+scene_hi:  .byte >expand_scene, >remap_scene, >card, >card, >card
 
 ; The scene's name on the bottom row (cols 0-30).
 show_name:
@@ -210,6 +217,174 @@ frame:
 :       lda #0
         sta drawn
         jmp cpu_start
+
+; Both buffers: the picture's rows 0-191 (remapped through the table at d_tbl
+; when A is VICX_DMA_REMAP, else copied).
+pic_both:
+        lda #VICX_DMA_COPY
+pic_op: sta d_op
+        lda #VICX_DMA_SRC_XRAM | VICX_DMA_DST_VRAM
+        sta d_fl
+        lda #<SPACE_PIX
+        sta d_src
+        lda #>SPACE_PIX
+        sta d_src + 1
+        lda #^SPACE_PIX
+        sta d_src + 2
+        lda #0
+        sta d_trans                     ; never in the picture (16-207)
+        sta d_dst
+        sta d_dst + 1
+        sta d_dst + 2
+        lda #<(192 * 320)
+        sta d_w
+        lda #>(192 * 320)
+        sta d_w + 1
+        jsr dma_go
+        inc d_dst + 2
+        jmp dma_go
+
+; --- remap -----------------------------------------------------------------------
+; The picture in dim greys (one remap per buffer), and a round spotlight in
+; full colour moving over it: each frame one remap puts the grey back where
+; the light was in this buffer, and ten copies draw it where it is now.
+remap_scene:
+        VICX_P0_SET GREY_TBL, VICX_STEP_1
+        ldx #0
+:       lda grey_table,x
+        sta VICX_P0_DATA
+        inx
+        bne :-
+        VICX_P0_SET VICX_PALETTE + RAINBOW * 4, VICX_STEP_1
+        ldx #0
+:       lda grey_pal,x
+        sta VICX_P0_DATA
+        inx
+        cpx #32 * 4
+        bne :-
+        lda #<GREY_TBL
+        sta d_tbl
+        lda #>GREY_TBL
+        sta d_tbl + 1
+        lda #^GREY_TBL
+        sta d_tbl + 2
+        lda #VICX_DMA_REMAP
+        jsr pic_op
+        lda #$FF
+        sta pvx
+        sta pvx + 1
+        lda #<REMAP_FRAMES
+        sta tmr
+        lda #>REMAP_FRAMES
+        sta tmr + 1
+@lp:    jsr frame
+        ldx back                        ; grey again where it was
+        lda pvx,x
+        cmp #$FF
+        beq @new
+        sta cx
+        lda #0
+        sta cx + 1
+        lda pvy,x
+        sta cy
+        lda #VICX_DMA_REMAP
+        sta d_op
+        lda #SPOT
+        sta d_w
+        sta d_h
+        jsr box
+@new:   ldx sa                          ; where it is now
+        lda spot_x,x
+        ldy back
+        sta pvx,y
+        lda spot_y,x
+        sta pvy,y
+        sta cy
+        lda #0
+        sta t2                          ; band
+@band:  ldx t2
+        ldy back
+        lda pvx,y                       ; x = left + 40 - half width (to 300)
+        clc
+        adc #40
+        sta cx
+        lda #0
+        adc #0
+        sta cx + 1
+        lda cx
+        sec
+        sbc spot_hw,x
+        sta cx
+        lda cx + 1
+        sbc #0
+        sta cx + 1
+        lda spot_hw,x
+        asl
+        sta d_w
+        lda #0
+        rol
+        sta d_w + 1
+        lda #8
+        sta d_h
+        lda #VICX_DMA_COPY
+        sta d_op
+        jsr box_src
+        lda cy
+        clc
+        adc #8
+        sta cy
+        inc t2
+        lda t2
+        cmp #10
+        beq :+
+        jmp @band
+:       inc sa
+        lda #1
+        sta drawn
+        jsr cpu_end
+        jsr count
+        beq :+
+        jmp @lp
+:       rts
+
+; A 2D transfer of d_w x d_h from the picture at (cx, cy) to the same place
+; in the drawn buffer, with operation d_op.
+box:    lda #0
+        sta d_w + 1
+box_src:
+        lda #VICX_DMA_SRC_XRAM | VICX_DMA_DST_VRAM | VICX_DMA_2D
+        sta d_fl
+        lda #<320
+        sta d_ss
+        sta d_ds
+        lda #>320
+        sta d_ss + 1
+        sta d_ds + 1
+        lda #0
+        sta d_trans
+        ldx cy                          ; offset = cy * 320 + cx
+        lda row_lo,x
+        clc
+        adc cx
+        sta t0
+        lda row_hi,x
+        adc cx + 1
+        sta t1
+        lda t0
+        sta d_dst
+        clc
+        adc #<SPACE_PIX
+        sta d_src
+        lda t1
+        sta d_dst + 1
+        adc #>SPACE_PIX
+        sta d_src + 1
+        lda #^SPACE_PIX
+        adc #0
+        sta d_src + 2
+        lda back
+        sta d_dst + 2
+        jmp dma_go
 
 ; --- a scene this build lacks --------------------------------------------------
 ; The panel in plain blue in both buffers, NOT IN THIS BUILD over it.
@@ -277,6 +452,14 @@ panel_clear:
 
 ; --- expand ------------------------------------------------------------------
 expand_scene:
+        jsr pic_both                    ; the picture in colour, rainbow palette
+        VICX_P0_SET VICX_PALETTE + RAINBOW * 4, VICX_STEP_1
+        ldx #0
+:       lda pal_extra,x
+        sta VICX_P0_DATA
+        inx
+        cpx #32 * 4
+        bne :-
         lda #<EXPAND_FRAMES
         sta tmr
         lda #>EXPAND_FRAMES
@@ -615,6 +798,12 @@ dma_go: VICX_P0_SET VICX_DMADESC, VICX_STEP_1
         lda d_trans
         sta VICX_P0_DATA
         lda #VICX_DMA_NONE
+        sta VICX_P0_DATA
+        lda d_tbl                       ; +21-+23: remap table
+        sta VICX_P0_DATA
+        lda d_tbl + 1
+        sta VICX_P0_DATA
+        lda d_tbl + 2
         sta VICX_P0_DATA
         lda #0
         sta VICX_DMA_CMD
