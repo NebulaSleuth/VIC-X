@@ -54,7 +54,25 @@ PAN_MAX = 320 - BOX_W
 LAKE_Y  = 96                    ; the reflection: rows 96-191
 SCALE_FRAMES = 750              ; 15 s
 NORB    = 6                     ; ships in orbit
+LIST_FRAMES = 750               ; 15 s
+LIST_O  = $0E600                ; each buffer's list: buffer * $10000 + this
+                                ; (rows 184-199 and the free VRAM after them)
+BALL_V  = $0FF00                ; VRAM: four 8x8 balls, after buffer 0's list
+NSNAKE  = 4
+NBOB    = 48                    ; balls a snake
+NB      = NSNAKE * NBOB
 CARD_FRAMES   = 150             ; 3 s
+
+; Port 0 to address addr (16 bits) in the 64 KB bank held in bankvar.
+.macro VICX_P0_SET_B addr, bankvar, step
+        lda #<(addr)
+        sta VICX_P0_ADDRL
+        lda #>(addr)
+        sta VICX_P0_ADDRM
+        lda bankvar
+        ora #(step)
+        sta VICX_P0_ADDRH
+.endmacro
 
 ; zero page
 d_op    = $10                   ; the transfer for dma_go (descriptor 0)
@@ -101,6 +119,11 @@ ok      = $4A                   ; object number
 mirf    = $4B                   ; draw: mirrored when not 0
 ow      = $4C                   ; draw: width
 oh      = $4D                   ; draw: height
+xi      = $4E                   ; lists: path positions
+yi      = $4F
+lt      = $50                   ; ... and where the snakes' heads are
+lt2     = $51
+sn      = $52                   ; snake
 
 .code
 main:
@@ -125,6 +148,8 @@ main:
         sta $D018
 
         jsr build_fonts
+        ; the big tables (steps, paths, balls, the grey remap) to $C000
+        XRAM_TO_C64 RAM_TABLES, BLITTER_RAM, RAM_TABLES_LEN
 
         ; palette: the picture's colours, then the demo's own
         XRAM_TO_VRAM SPACE_PAL, VICX_PALETTE + 16 * 4, SPACE_PAL_LEN
@@ -184,8 +209,8 @@ scene:
 
 scene_bit: .byte VICX_BLIT_EXPAND, VICX_BLIT_REMAP, VICX_BLIT_SCALED
            .byte VICX_BLIT_DIRECTION, VICX_BLIT_LIST
-scene_lo:  .byte <expand_scene, <remap_scene, <scale_scene, <dir_scene, <card
-scene_hi:  .byte >expand_scene, >remap_scene, >scale_scene, >dir_scene, >card
+scene_lo:  .byte <expand_scene, <remap_scene, <scale_scene, <dir_scene, <list_scene
+scene_hi:  .byte >expand_scene, >remap_scene, >scale_scene, >dir_scene, >list_scene
 
 ; The scene's name on the bottom row (cols 0-30).
 show_name:
@@ -228,6 +253,11 @@ frame:
         cmp lvf
         beq :-
         sta lvf
+        lda $D011                       ; noticed late (the last frame's work
+        bmi :-                          ; ran on)? then the next one, so a
+        lda $D012                       ; flip never lands in the picture
+        cmp #40
+        bcs :-
         lda drawn
         beq :+
         VICX_P0_SET VICX_LAYER0 + VICX_L_BASE, VICX_STEP_1
@@ -655,6 +685,279 @@ draw_ship:
         lda oh
         sta ph,y
         rts
+
+; --- lists in VRAM --------------------------------------------------------------
+; Four snakes of 48 balls follow Lissajous paths: each frame one list in VRAM
+; clears the picture (one fill) and stamps the 192 balls (masked copies),
+; started by one DMA_CMD write.  Each buffer has its own list, below the 184
+; rows the scene uses (rows 184-199 and the free VRAM after the buffer);
+; from raster line 234 the VIC-II background is opaque again (CTRL bit 4
+; off), so those rows do not show.  The CPU only rewrites each ball's
+; destination (+6, +7), down the list with the port's step of 32.  The CPU
+; load counts that work, not the wait for the blitter.
+list_scene:
+        VICX_P0_SET VICX_PALETTE + RAINBOW * 4, VICX_STEP_1
+        ldx #0
+:       lda pal_extra,x
+        sta VICX_P0_DATA
+        inx
+        cpx #32 * 4
+        bne :-
+        VICX_P0_SET BALL_V, VICX_STEP_1
+        ldx #0
+:       lda balls,x
+        sta VICX_P0_DATA
+        inx
+        bne :-
+        ; the two lists: clear rows 0-183, NB balls, the end ($FF)
+        lda #0
+        jsr build_list
+        lda #1
+        jsr build_list
+        jsr split_on
+        lda #<LIST_FRAMES
+        sta tmr
+        lda #>LIST_FRAMES
+        sta tmr + 1
+@lp:    jsr frame
+        jsr bob_places
+        lda back                        ; this buffer's list: the balls'
+        sta t2                          ; destinations, low then middle byte
+        VICX_P0_SET_B LIST_O + 32 + 6, t2, VICX_STEP_32
+        ldx #0
+:       lda offl,x
+        sta VICX_P0_DATA
+        inx
+        cpx #NB
+        bne :-
+        VICX_P0_SET_B LIST_O + 32 + 7, t2, VICX_STEP_32
+        ldx #0
+:       lda offh,x
+        sta VICX_P0_DATA
+        inx
+        cpx #NB
+        bne :-
+        VICX_P0_SET VICX_DMALIST, VICX_STEP_1
+        lda #<LIST_O
+        sta VICX_P0_DATA
+        lda #>LIST_O
+        sta VICX_P0_DATA
+        lda back
+        sta VICX_P0_DATA
+        lda #VICX_DMA_LIST              ; all of it
+        sta VICX_DMA_CMD
+        jsr cpu_end                     ; (the CPU's part ends here)
+:       lda VICX_DMA_CMD
+        bmi :-
+        lda #1
+        sta drawn
+        inc lt
+        inc lt
+        inc lt2
+        inc lt2
+        inc lt2
+        jsr count
+        beq :+
+        jmp @lp
+:       jsr frame                       ; show the last one with the split
+        jsr frame
+        ; rows 192-199 (the bottom text row) back to colour 0 in both
+        ; buffers: the other scenes leave them alone
+        lda #VICX_DMA_FILL
+        sta d_op
+        lda #VICX_DMA_DST_VRAM
+        sta d_fl
+        lda #0
+        sta d_fill
+        sta d_dst + 2
+        lda #<(192 * 320)
+        sta d_dst
+        lda #>(192 * 320)
+        sta d_dst + 1
+        lda #<(8 * 320)
+        sta d_w
+        lda #>(8 * 320)
+        sta d_w + 1
+        jsr dma_go
+        inc d_dst + 2
+        jsr dma_go
+        jmp split_off
+
+; The split, by raster IRQ (the rest of the demo runs with interrupts
+; off): from line 234 the VIC-II background is opaque (CTRL bit 4 off), so
+; rows 184-199, which hold the lists, do not show; from line 8 the layer
+; shows through again.
+SPLIT_LOW  = 234
+SPLIT_HIGH = 8
+split_on:
+        lda #<split_irq
+        sta $0314
+        lda #>split_irq
+        sta $0315
+        lda #SPLIT_LOW
+        sta $D012
+        lda $D011
+        and #$7F
+        sta $D011
+        lda #$01
+        sta $D019                       ; ack
+        sta $D01A                       ; raster IRQ on
+        cli
+        rts
+
+split_off:
+        sei
+        lda #0
+        sta $D01A
+        lda #$01
+        sta $D019
+        lda #VICX_CTRL_L0 | VICX_CTRL_BGTRANS
+        sta VICX_CTRL
+        rts
+
+; (KERNAL IRQ entry: A, X, Y on the stack; $EA81 takes them off)
+split_irq:
+        lda #$01
+        sta $D019
+        lda $D012
+        cmp #SPLIT_LOW
+        bcc :+
+        lda #VICX_CTRL_L0               ; low: the VIC-II covers the lists
+        sta VICX_CTRL
+        lda #SPLIT_HIGH
+        sta $D012
+        jmp $EA81
+:       lda #VICX_CTRL_L0 | VICX_CTRL_BGTRANS
+        sta VICX_CTRL
+        lda #SPLIT_LOW
+        sta $D012
+        jmp $EA81
+
+; The list for buffer A at A * $10000 + LIST_O.
+build_list:
+        sta t2
+        VICX_P0_SET_B LIST_O, t2, VICX_STEP_1
+        ldy #0
+:       lda list_clr,y
+        cpy #8
+        bne :+
+        lda t2                          ; +8: destination bank = the buffer
+:       sta VICX_P0_DATA
+        iny
+        cpy #32
+        bne :--
+        ldx #0
+@desc:  txa                             ; snake: ball BALL_V + snake * 64
+        ldy #$FF
+:       iny
+        sec
+        sbc #NBOB
+        bcs :-
+        tya
+        asl
+        asl
+        asl
+        asl
+        asl
+        asl
+        sta t0
+        ldy #0
+:       lda list_tpl,y
+        cpy #2
+        bne :+
+        lda t0                          ; +2: source low byte
+        jmp :++
+:       cpy #8
+        bne :+
+        lda t2                          ; +8: destination bank
+:       sta VICX_P0_DATA
+        iny
+        cpy #32
+        bne :---
+        inx
+        cpx #NB
+        bne @desc
+        lda #$FF
+        sta VICX_P0_DATA
+        rts
+
+; Where each ball goes: snake s, ball j at path positions
+; (lt + s * 64 + j * 5, lt2 + s * 40 + j * 7) -> offl, offh.
+bob_places:
+        ldx #0
+        lda #0
+        sta sn
+@snake: lda sn
+        asl
+        asl
+        asl
+        asl
+        asl
+        asl
+        clc
+        adc lt
+        sta xi
+        lda sn
+        asl
+        asl
+        asl
+        sta t0
+        asl
+        asl
+        clc
+        adc t0                          ; s * 40
+        adc lt2
+        sta yi
+        ldy #NBOB
+@ball:  sty t1
+        ldy yi
+        lda ly,y
+        tay
+        lda row_lo,y
+        sta t0
+        lda row_hi,y
+        ldy xi
+        sta t2
+        lda t0
+        clc
+        adc lx_lo,y
+        sta offl,x
+        lda t2
+        adc lx_hi,y
+        sta offh,x
+        lda xi
+        clc
+        adc #5
+        sta xi
+        lda yi
+        clc
+        adc #7
+        sta yi
+        inx
+        ldy t1
+        dey
+        bne @ball
+        inc sn
+        lda sn
+        cmp #NSNAKE
+        bne @snake
+        rts
+
+list_clr:                               ; clear rows 0-183 (colour 0)
+        .byte VICX_DMA_FILL, VICX_DMA_DST_VRAM
+        .dword 0, 0                             ; +8: the buffer
+        .word 184 * 320, 0, 0, 0
+        .byte 0, 0, $FF
+        .res 11
+.assert LIST_O + (NB + 2) * 32 <= BALL_V, error, "the list runs into the balls"
+.assert BALL_V + 256 <= $10000, error, "the balls leave buffer 0's spare VRAM"
+list_tpl:                               ; a masked copy of an 8x8 ball
+        .byte VICX_DMA_MASKED, VICX_DMA_SRC_VRAM | VICX_DMA_DST_VRAM | VICX_DMA_2D
+        .byte <BALL_V, >BALL_V, ^BALL_V, 0      ; +2-+5 (low byte per snake)
+        .byte 0, 0, 0, 0                        ; +6-+9 destination, buffer 0
+        .word 8, 8, 8, 320                      ; width, height, strides
+        .byte 0, 0, $FF                         ; fill, transparent, next
+        .res 11
 
 ; --- direction --------------------------------------------------------------
 ; A box panning over the galaxy that scrolls over itself (moving right needs
@@ -1538,3 +1841,5 @@ px_hi:  .res 16
 py:     .res 16
 pw:     .res 16
 ph:     .res 16
+offl:   .res NB                 ; lists: each ball's destination
+offh:   .res NB

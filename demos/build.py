@@ -92,7 +92,8 @@ DEMOS = {
         ("CUSTOM_PAL", "sixteen_custom.pal"),
     ],
     "blitter": [("SPACE_PIX", "space.pix"), ("SPACE_PAL", "space.pal"),
-                ("SHIP_SPR", "ship.spr"), ("SHIP_PAL", "ship.pal")],
+                ("SHIP_SPR", "ship.spr"), ("SHIP_PAL", "ship.pal"),
+                ("RAM_TABLES", "blitter_ram.bin")],
     "desktop": [
         ("DESK_IMG", "desktop.img"),
         ("DESK_PAL", "desktop.pal"), ("PHOTO_PAL", "desktop_photo.pal"),
@@ -123,7 +124,74 @@ def world_files():
     return [f"WORLD_ROWS    = {info['rows']}", f"WORLD_SEGS    = {len(starts)}"]
 
 
-PREPACK = {"bigworld": world_files}
+BLITTER_RAM = 0xC000                # where the blitter demo's big tables go
+
+
+def blitter_ram():
+    """The blitter demo's big tables, as (name, bytes): packed with its data
+    and copied by DMA to C64 RAM at BLITTER_RAM, to keep the program short."""
+    out = []
+    # remap: the picture's 192 colours (entries 16-207) to 32 dim greys at
+    # 208-239; every other entry to itself
+    spal = (BUILD / "space.pal").read_bytes()
+    grey = list(range(256))
+    for k in range(192):
+        r, g, b = spal[4 * k:4 * k + 3]
+        y = (299 * r + 587 * g + 114 * b) / 1000
+        grey[16 + k] = 208 + min(31, int(y * 32 / 256))
+    out.append(("grey_table", grey))
+    gp = []
+    for k in range(32):                 # entries 208-239: dim greys
+        v = int(k * 150 / 31)
+        gp += [v, v, v + 8 if v < 247 else v, 0]
+    out.append(("grey_pal", gp))
+    # scaled copy: the 8.8 step that draws the 32-pixel ship d pixels big
+    # (d = 0-128), the orbit (x, y, size 10-38 for depth), the centre ship's
+    # zoom (50-110) and its card flip (width / 128, mirrored)
+    steps = [32 * 256 // max(1, d) for d in range(129)]
+    out.append(("step_lo", [v & 255 for v in steps]))
+    out.append(("step_hi", [v >> 8 for v in steps]))
+    ang = [2 * math.pi * a / 256 for a in range(256)]
+    ox = [int(160 + 120 * math.cos(t)) for t in ang]
+    out.append(("ox_lo", [v & 255 for v in ox]))
+    out.append(("ox_hi", [v >> 8 for v in ox]))
+    out.append(("oy", [int(96 + 34 * math.sin(t)) for t in ang]))
+    out.append(("od", [int(24 + 14 * math.sin(t)) for t in ang]))
+    out.append(("cz", [int(80 + 30 * math.sin(t)) for t in ang]))
+    out.append(("fwq", [max(4, int(128 * abs(math.cos(t)))) for t in ang]))
+    out.append(("fm", [1 if math.cos(t) < 0 else 0 for t in ang]))
+    # lists: the snakes' paths (x 0-312, y 4-172) and their 8x8 balls,
+    # shaded in the rainbow's colours (208 + snake * 8 + shade)
+    out.append(("lx_lo", [int(156 + 150 * math.sin(t)) & 255 for t in ang]))
+    out.append(("lx_hi", [int(156 + 150 * math.sin(t)) >> 8 for t in ang]))
+    out.append(("ly", [int(88 + 84 * math.sin(2 * t + 0.7)) for t in ang]))   # balls stay above row 184
+    balls = []
+    for k in range(4):
+        for y in range(8):
+            for x in range(8):
+                if math.hypot(x - 3.5, y - 3.5) > 3.9:
+                    balls.append(0)
+                else:
+                    lit = math.hypot(x - 2.3, y - 2.3) / 6.5      # light at the top left
+                    balls.append(208 + k * 8 + min(7, int(lit * 8)))
+    out.append(("balls", balls))
+    return out
+
+
+def blitter_files():
+    """build/blitter_ram.bin (the big tables) and their RAM addresses for
+    assets.inc."""
+    data = bytearray()
+    lines = [f"BLITTER_RAM = ${BLITTER_RAM:04X}"]
+    for name, vals in blitter_ram():
+        lines.append(f"{name:<12}= ${BLITTER_RAM + len(data):04X}")
+        data += bytes(vals)
+    assert BLITTER_RAM + len(data) <= 0xD000, len(data)
+    (BUILD / "blitter_ram.bin").write_bytes(bytes(data))
+    return lines
+
+
+PREPACK = {"bigworld": world_files, "blitter": blitter_files}
 
 
 def run(cmd, **kw):
@@ -277,21 +345,6 @@ def blitter_tables(path):
     for (r, g, b) in pal:
         lines.append(f"        .byte {r}, {g}, {b}, 0")
     lines.append(f"PAL_EXTRA_N = {len(pal)}")
-    # remap: the picture's 192 colours (entries 16-207) to 32 dim greys at
-    # 208-239; every other entry to itself
-    spal = (BUILD / "space.pal").read_bytes()
-    grey = list(range(256))
-    for k in range(192):
-        r, g, b = spal[4 * k:4 * k + 3]
-        y = (299 * r + 587 * g + 114 * b) / 1000
-        grey[16 + k] = 208 + min(31, int(y * 32 / 256))
-    lines.append("grey_table:                     ; the remap table")
-    for i in range(0, 256, 16):
-        lines.append("        .byte " + ", ".join(str(v) for v in grey[i:i + 16]))
-    lines.append("grey_pal:                       ; entries 208-239: dim greys")
-    for k in range(32):
-        v = int(k * 150 / 31)
-        lines.append(f"        .byte {v}, {v}, {v + 8 if v < 247 else v}, 0")
     # the spotlight: half-widths of ten bands of 8 rows, radius 40
     lines.append("spot_hw:")
     lines.append("        .byte " + ", ".join(
@@ -300,24 +353,6 @@ def blitter_tables(path):
     for i in range(0, 256, 16):
         lines.append("        .byte " + ", ".join(
             str(int(120 + 100 * math.sin(2 * math.pi * a / 256))) for a in range(i, i + 16)))
-    # scaled copy: the 8.8 step that draws the 32-pixel ship d pixels big,
-    # the orbit (x, y, size), the centre ship's zoom and its card flip
-    def tbl(name, vals, comment=""):
-        lines.append(f"{name}:{comment}")
-        for i in range(0, len(vals), 16):
-            lines.append("        .byte " + ", ".join(str(v) for v in vals[i:i + 16]))
-    steps = [32 * 256 // max(1, d) for d in range(129)]
-    tbl("step_lo", [v & 255 for v in steps], "                         ; d = 0-128")
-    tbl("step_hi", [v >> 8 for v in steps])
-    ang = [2 * math.pi * a / 256 for a in range(256)]
-    ox = [int(160 + 120 * math.cos(t)) for t in ang]
-    tbl("ox_lo", [v & 255 for v in ox], "                           ; orbit")
-    tbl("ox_hi", [v >> 8 for v in ox])
-    tbl("oy", [int(96 + 34 * math.sin(t)) for t in ang])
-    tbl("od", [int(24 + 14 * math.sin(t)) for t in ang], "                              ; size 10-38: depth")
-    tbl("cz", [int(80 + 30 * math.sin(t)) for t in ang], "                              ; centre size 50-110")
-    tbl("fwq", [max(4, int(128 * abs(math.cos(t)))) for t in ang], "                             ; flip width, /128")
-    tbl("fm", [1 if math.cos(t) < 0 else 0 for t in ang], "                              ; flip: mirrored")
     lines.append("spot_y:                         ; centre y - 40")
     for i in range(0, 256, 16):
         lines.append("        .byte " + ", ".join(
