@@ -18,8 +18,12 @@ Extension Spec". This repository holds everything that is not emulator code:
 | `tools/`           | developer tools: PNG converter, demo art generator |
 | `hdl/`             | the VHDL block (later) |
 
-The reference model is a VICE fork, `vice-vicx` (branch `vicx`, from VICE
-3.10.0), kept next to this repository at `D:\Repos\vice-vicx`.
+The reference model is a VICE fork,
+[vice-vicx](https://github.com/NebulaSleuth/vice-vicx/tree/vicx) (branch
+`vicx`, from VICE 3.10.0). The tests and the build commands below expect it
+checked out next to this repository, here at `D:\Repos\vice-vicx`:
+
+    git clone -b vicx https://github.com/NebulaSleuth/vice-vicx.git
 
 ## Status
 
