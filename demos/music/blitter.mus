@@ -1,0 +1,76 @@
+; blitter.mus - the blitter demo's soundtrack.  A minor, tempo 6 (125 BPM).
+; Demoscene style: an octave-bouncing bass, drums with chord arpeggios
+; stabbed between the hits on the same voice, a pulse lead with vibrato, a
+; wah lead for the middle eight and a saw lead for the return.  32 bars:
+;   intro   Am F C G                (bass, drums and stabs; the lead picks up)
+;   A       Am F C G Am F G E
+;   B       F G Am Am F G E E       (filtered bass, wah lead)
+;   A'      Am F C G Am F G E       (saw lead)
+;   outro   Am F G E                (back to the top)
+tempo 6
+
+; ---- bass (v2): octave jumps in eighths; B section through the filter
+pattern bAm { @bass_p o2 a8 o3 a8 o2 a8 o3 a8 o2 a8 o3 a8 o2 a8 o3 a8 }
+pattern bF  { @bass_p o2 f8 o3 f8 o2 f8 o3 f8 o2 f8 o3 f8 o2 f8 o3 f8 }
+pattern bC  { @bass_p o2 c8 o3 c8 o2 c8 o3 c8 o2 c8 o3 c8 o2 c8 o3 c8 }
+pattern bG  { @bass_p o2 g8 o3 g8 o2 g8 o3 g8 o2 g8 o3 g8 o2 g8 o3 g8 }
+pattern bE  { @bass_p o2 e8 o3 e8 o2 e8 o3 e8 o2 e8 o3 e8 o2 e8 o3 e8 }
+pattern sF  { @bass o2 f8 f8 o3 f8 o2 f8 f8 o3 f8 o2 f8 o3 f8 }
+pattern sG  { @bass o2 g8 g8 o3 g8 o2 g8 g8 o3 g8 o2 g8 o3 g8 }
+pattern sAm { @bass o2 a8 a8 o3 a8 o2 a8 a8 o3 a8 o2 a8 o3 a8 }
+pattern sE  { @bass o2 e8 e8 o3 e8 o2 e8 e8 o3 e8 o2 e8 o3 e8 }
+
+; ---- drums with chord stabs between them (v3)
+pattern dAm { @kick_big o4 c8 @arp_min o4 a8 @snare o5 c8 @arp_min o4 a8 @kick_big o4 c8 @kick_big o4 c8 @snare o5 c8 @arp_min o4 a8 }
+pattern dF  { @kick_big o4 c8 @arp_maj o4 f8 @snare o5 c8 @arp_maj o4 f8 @kick_big o4 c8 @kick_big o4 c8 @snare o5 c8 @arp_maj o4 f8 }
+pattern dC  { @kick_big o4 c8 @arp_maj o4 c8 @snare o5 c8 @arp_maj o4 c8 @kick_big o4 c8 @kick_big o4 c8 @snare o5 c8 @arp_maj o4 c8 }
+pattern dG  { @kick_big o4 c8 @arp_maj o4 g8 @snare o5 c8 @arp_maj o4 g8 @kick_big o4 c8 @kick_big o4 c8 @snare o5 c8 @arp_maj o4 g8 }
+pattern dE  { @kick_big o4 c8 @arp_maj o4 e8 @snare o5 c8 @arp_maj o4 e8 @kick_big o4 c8 @kick_big o4 c8 @snare o5 c8 @arp_maj o4 e8 }
+pattern fill { @kick_big o4 c8 @snare o5 c16 c16 c8 c16 c16 @tom_big o4 c8 @tom_big o3 a8 @tom_big o3 f8 @crash o6 a8 }
+
+; ---- the lead's tune (8 bars over Am F C G Am F G E)
+pattern tuneA {
+  o6 e4 e8 d8 c4 o5 b8 a8
+  o6 c4. o5 a8 f4 a4
+  o5 g8 a8 g8 e8 c4 e8 g8
+  o5 b4. a8 g4 b4
+  o6 e4 e8 d8 c4 o5 b8 a8
+  o6 c4. d8 c4 o5 a4
+  o5 b8 o6 c8 d8 c8 o5 b4 g4
+  o5 g+2 b4 e4
+}
+
+v1 {
+  r1 r1 r1
+  @lead r2 o5 e8 a8 b8 o6 c8
+  @lead $tuneA
+  @lead_f
+  o6 a8 a8 r8 a8 g8 f8 e8 f8
+  o6 g4 d8 g8 b8 g8 d4
+  o6 a8 a8 r8 a8 b8 a8 g8 e8
+  o6 e2 r4 c8 d8
+  o6 f8 f8 r8 f8 e8 d8 c8 d8
+  o6 d4 o5 b8 o6 d8 g8 f8 d4
+  o6 e8 g+8 b8 o7 d8 c8 o6 b8 g+8 e8
+  o6 e2. r4
+  @lead_saw $tuneA
+  @lead
+  o6 a2 e2
+  o6 f2 c2
+  o6 d2 o5 b2
+  o5 g+2 b2
+}
+v2 {
+  $bAm $bF $bC $bG
+  $bAm $bF $bC $bG $bAm $bF $bG $bE
+  $sF $sG $sAm $sAm $sF $sG $sE $sE
+  $bAm $bF $bC $bG $bAm $bF $bG $bE
+  $bAm $bF $bG $bE
+}
+v3 {
+  $dAm $dF $dC $fill
+  $dAm $dF $dC $dG $dAm $dF $dG $fill
+  $dF $dG $dAm $dAm $dF $dG $dE $fill
+  $dAm $dF $dC $dG $dAm $dF $dG $fill
+  $dAm $dF $dG $fill
+}

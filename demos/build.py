@@ -96,7 +96,8 @@ DEMOS = {
     ],
     "blitter": [("SPACE_PIX", "space.pix"), ("SPACE_PAL", "space.pal"),
                 ("SHIP_SPR", "ship.spr"), ("SHIP_PAL", "ship.pal"),
-                ("RAM_TABLES", "blitter_ram.bin")],
+                ("RAM_TABLES", "blitter_ram.bin"),
+                ("MUSIC", "blitter_music.bin", 0x2000)],   # on an 8 KB page: the window
     "desktop": [
         ("DESK_IMG", "desktop.img"),
         ("DESK_PAL", "desktop.pal"), ("PHOTO_PAL", "desktop_photo.pal"),
@@ -216,6 +217,14 @@ def blitter_files():
         data += bytes(vals)
     assert BLITTER_RAM + len(data) <= 0xD000, len(data)
     (BUILD / "blitter_ram.bin").write_bytes(bytes(data))
+    # the soundtrack (music/blitter.mus) as SID register frames, 32 bytes each
+    insts = HERE / "music" / "instruments.txt"
+    mus = HERE / "music" / "blitter.mus"
+    n, _ = sidplay.tune_frames(mus, insts)
+    assert n % 256 == 0, f"blitter.mus: {n} frames, not whole 8 KB pages"
+    (BUILD / "blitter_music.bin").write_bytes(
+        b"".join(f + bytes(7) for f in sidplay.render(mus, insts, n)))
+    lines.append(f"MUS_PAGES   = {n // 256}")
     return lines
 
 

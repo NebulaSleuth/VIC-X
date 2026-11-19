@@ -124,6 +124,10 @@ yi      = $4F
 lt      = $50                   ; ... and where the snakes' heads are
 lt2     = $51
 sn      = $52                   ; snake
+half    = $53                   ; (IRQ) 0: next is line 234, 1: line 8
+mf      = $54                   ; 2 bytes: the music's frame
+mptr    = $FD                   ; 2 bytes: (IRQ) the frame in window 1
+MWIN    = $6000
 
 .code
 main:
@@ -148,6 +152,14 @@ main:
         sta $D018
 
         jsr build_fonts
+        ; the music: window 1 at $6000 (the loader's buffer, free now), the
+        ; raster IRQ plays it from here on
+        lda #VICX_SLOT_6000 | VICX_SLOT_ON
+        sta VICX_W1_SLOT
+        lda #0
+        sta mf
+        sta mf + 1
+        jsr irq_on
         ; the big tables (steps, paths, balls, the grey remap) to $C000
         XRAM_TO_C64 RAM_TABLES, BLITTER_RAM, RAM_TABLES_LEN
 
@@ -783,17 +795,23 @@ list_scene:
         jsr dma_go
         jmp split_off
 
-; The split, by raster IRQ (the rest of the demo runs with interrupts
-; off): from line 234 the VIC-II background is opaque (CTRL bit 4 off), so
-; rows 184-199, which hold the lists, do not show; from line 8 the layer
-; shows through again.
+; The raster IRQ, on from the start: at line 234 one frame of the music
+; (so it keeps time even when a scene runs at 25 fps) and, while the lists
+; scene wants it (split), the VIC-II background opaque (CTRL bit 4 off), so
+; rows 184-199, which hold the lists, do not show; at line 8 the layer shows
+; through again.  The CTRL write comes first: by the time the KERNAL hands
+; over (36 cycles and up to 7 more to finish an instruction) there are only
+; some 20 left before line 235 starts.  With the split off, split_off turns
+; that STA into a BIT, which only reads.
 SPLIT_LOW  = 234
 SPLIT_HIGH = 8
-split_on:
-        lda #<split_irq
+irq_on:
+        lda #<raster_irq
         sta $0314
-        lda #>split_irq
+        lda #>raster_irq
         sta $0315
+        lda #0
+        sta half
         lda #SPLIT_LOW
         sta $D012
         lda $D011
@@ -805,33 +823,77 @@ split_on:
         cli
         rts
 
+split_on:
+        lda #$8D                        ; STA abs
+        sta irq_ctrl
+        rts
+
 split_off:
-        sei
-        lda #0
-        sta $D01A
-        lda #$01
-        sta $D019
+        lda #$2C                        ; BIT abs
+        sta irq_ctrl
         lda #VICX_CTRL_L0 | VICX_CTRL_BGTRANS
         sta VICX_CTRL
         rts
 
 ; (KERNAL IRQ entry: A, X, Y on the stack; $EA81 takes them off)
-split_irq:
+raster_irq:
+        ldx half                        ; 0: line 234, 1: line 8
+        lda irq_ctrls,x
+irq_ctrl:
+        bit VICX_CTRL                   ; STA while the split is on
         lda #$01
         sta $D019
-        lda $D012
-        cmp #SPLIT_LOW
-        bcc :+
-        lda #VICX_CTRL_L0               ; low: the VIC-II covers the lists
-        sta VICX_CTRL
-        lda #SPLIT_HIGH
+        lda irq_lines,x
         sta $D012
-        jmp $EA81
-:       lda #VICX_CTRL_L0 | VICX_CTRL_BGTRANS
-        sta VICX_CTRL
-        lda #SPLIT_LOW
-        sta $D012
-        jmp $EA81
+        txa
+        eor #1
+        sta half
+        txa
+        bne :+
+        jsr music
+:       jmp $EA81
+
+irq_ctrls: .byte VICX_CTRL_L0, VICX_CTRL_L0 | VICX_CTRL_BGTRANS
+irq_lines: .byte SPLIT_HIGH, SPLIT_LOW
+
+; One frame of the music: frame mf of the stream (blitter.mus, rendered by
+; tools/sound/sidplay.py: 32 bytes a frame), through window 1 at $6000, into
+; the SID's 25 registers; it loops.
+music:  lda mf + 1                      ; page: MUSIC's + mf / 256
+        clc
+        adc #<(MUSIC >> 13)
+        sta VICX_W1_PAGEL
+        lda #>(MUSIC >> 13)
+        adc #0
+        sta VICX_W1_PAGEH
+        lda mf                          ; $6000 + (mf & 255) * 32
+        lsr
+        lsr
+        lsr
+        clc
+        adc #>MWIN
+        sta mptr + 1
+        lda mf
+        asl
+        asl
+        asl
+        asl
+        asl
+        sta mptr
+        ldy #24
+:       lda (mptr),y
+        sta $D400,y
+        dey
+        bpl :-
+        inc mf
+        bne :+
+        inc mf + 1
+        lda mf + 1
+        cmp #MUS_PAGES
+        bne :+
+        lda #0
+        sta mf + 1
+:       rts
 
 ; The list for buffer A at A * $10000 + LIST_O.
 build_list:
