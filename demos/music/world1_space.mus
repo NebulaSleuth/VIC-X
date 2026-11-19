@@ -1,0 +1,37 @@
+; world1_space.mus - BIG WORLD, the edge of space.  A minor, tempo 8 (94 BPM).
+; Slow and weightless: a soft flute line over drifting triangle chords and a
+; drone that swells on each chord; no drums.  16 bars:
+; Am Am F F C C G G | Am Am F F Dm Dm E E (the E major pulls home).
+tempo 8
+
+v1 {
+  @lead_soft
+  r1
+  o5 e2. d8 c8
+  o4 a1
+  r2 a4 o5 c4
+  o5 e2 d4 c4
+  o5 d1
+  o4 b2 o5 d4 e4
+  o5 d2. r4
+  o5 a2. g8 e8
+  o5 g2 e4 d4
+  o5 c1
+  r2 c4 d4
+  o5 f2 e4 d4
+  o5 e2 a4 g4
+  o5 g+1
+  r1
+}
+v2 {
+  @arp_smin o3 a1 a1
+  @arp_smaj o3 f1 f1 c1 c1 g1 g1
+  @arp_smin o3 a1 a1
+  @arp_smaj o3 f1 f1
+  @arp_smin o3 d1 d1
+  @arp_smaj o3 e1 e1
+}
+v3 {
+  @drone o2 a1 a1 f1 f1 c1 c1 o1 g1 g1
+  o2 a1 a1 f1 f1 d1 d1 e1 e1
+}

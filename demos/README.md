@@ -10,7 +10,7 @@ the CPU has to do while VIC-X does the work.
 | `parallax` | Two 256-colour tile layers scrolling at different speeds behind a normal VIC-II score bar | tile layers, scrolling, mixing, CTRL bit 4 split per raster line |
 | `bullets` | 128 sprites: a 32x32 ship and 127 bullets in four rotating spiral arms over a deep-space bitmap, with hit detection | sprite engine, collision groups and hit masks, DMA table updates, bitmap layer |
 | `gallery` | 256-colour pictures streamed from XRAM, faded in and out | 8-bit bitmaps, double buffering, background DMA, palette fades |
-| `bigworld` | A 320x3198 world (1 MB, six scenes from space to a molten core) scrolling up and down, one new row streamed in per frame, with music for each scene streamed from XRAM | XRAM, a 256-row VRAM ring with a wrapping bitmap base, row DMA, XRAM windows (scene table, 280 KB of SID music), REU DMA (captions) |
+| `bigworld` | A 320x3198 world (1 MB, six scenes from space to a molten core) scrolling up and down, one new row streamed in per frame, with music for each scene streamed from XRAM | XRAM, a 256-row VRAM ring with a wrapping bitmap base, row DMA, XRAM windows (scene table, 312 KB of SID music), REU DMA (captions) |
 | `wide` | The parallax world switching every 5 seconds between the 320x200 window and the whole visible frame; in full-frame mode the text bar moves to the top of the frame | wide window, edges latched per line and per frame, scroll offsets that keep the scene still, a sprite-engine text bar, layer order |
 | `sixteen` | A plain C64 multicolour bitmap, alternating between the stock palette and 16 colours picked for the picture | VIC-II colour remap (CTRL bit 3) |
 | `blitter` | One scene per optional blitter operation, read from CAP_BLIT: so far expand (a sine scroller of 16x16 letters stamped over a picture with masked expand, and a scrolling text panel, a colour per line, with expand) remap (the picture dimmed to greys through a 256-byte table, with a spotlight in full colour moving over it) scaled copy (one 32x32 ship drawn at any size: a big one zooming and turning like a card, six small ones in orbit sized by depth) and direction (a box panning over the picture that scrolls over itself with the backwards bit, its mirror image, and a rippling reflection drawn upside down through a negative stride), and lists in VRAM (four snakes of 48 balls: one fill and 192 masked copies a frame from one list, started by one DMA_CMD write; the lists sit below a 184-row playfield, hidden by a raster-IRQ split); scenes the build lacks say NOT IN THIS BUILD | blitter expand, masked expand, remap, scaled copy, mirror and backwards, lists in VRAM, signed strides, CAP_BLIT, double-buffered 8-bit bitmap, fonts built from the character ROM at one bit per pixel in XRAM |
@@ -85,7 +85,7 @@ standard interleave the fast loader still works, at half the speed.
 | `wide` | D64 | 52 KB | 34 s | about 2.5 minutes |
 | `bullets` | D64 | 59 KB | 37 s | about 2.5 minutes |
 | `gallery` | D81 | 265 KB | 93 s | about 12 minutes |
-| `bigworld` | D81 | 537 KB | about 3.5 minutes | about 24 minutes |
+| `bigworld` | D81 | 511 KB | about 3.5 minutes | about 23 minutes |
 
 The times are from the demo starting to it running, including unpacking
 (1 MB for `bigworld`). `../tests/fastload_check.py` runs a demo from its
@@ -162,12 +162,17 @@ the REU, a demo says what is missing and stops.
   VICE applies palette changes once per frame. Its stock version is converted
   to the colours VICE 3.10 shows by default, which are not those of every
   real C64 or palette setting.
-- `bigworld`'s music is 280 KB of SID register frames in XRAM (25
+- `bigworld`'s music is 312 KB of SID register frames in XRAM (25
   registers a frame, padded to 32 bytes so a frame never crosses an 8 KB
-  page), made by `../tools/gen_music.py`: six original sections, one for
-  each scene, each in its own key and tempo. Each frame the CPU points XRAM
-  window 1 at the frame's page and copies 25 bytes to the SID; a new
-  scene's section starts at the next bar line. On NTSC it plays 20% fast.
+  page): six sections, one for each scene, composed by hand in
+  `music/world*.mus` for the TimeWarrior project's SID player and its
+  instrument bank (`music/instruments.txt`, `../tools/sound/musfmt.py`).
+  `../tools/sound/sidplay.py`, that player in Python, turns each into its
+  frames; it matches the 6502 player register for register (checked on
+  TimeWarrior's tunes in VICE). Each frame the demo points XRAM window 1
+  at the frame's page and copies 25 bytes to the SID; a new scene's section
+  starts at the next bar line. On NTSC it plays 20% fast.
+  `../tools/sound/render_wav.py` records a stream in VICE, to listen to.
 - `desktop`: move the pointer with a 1351 mouse in either port (on the
   MiSTer, set Pot 1/2 or Pot 3/4 to Mouse; until the mouse moves, the demo
   reads both ports in turn) or a joystick in port 2; the left button or

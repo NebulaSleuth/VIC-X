@@ -1,0 +1,36 @@
+; world6_core.mus - BIG WORLD, the molten core.  D minor, tempo 5 (150 BPM).
+; Heat and pressure: a wah lead riff, then a cutting saw lead, over a resonant
+; driving bass and a heavy kit.  16 bars:
+; Dm Dm Bb C | Dm Dm Bb A | Dm Bb Gm A | Dm Bb C A.
+tempo 5
+
+pattern rD { @bass o2 d8 d8 d8 d8 o3 d8 o2 d8 c8 d8 }
+pattern rB { @bass o1 b-8 b-8 b-8 b-8 o2 b-8 o1 b-8 a8 b-8 }
+pattern rC { @bass o2 c8 c8 c8 c8 o3 c8 o2 c8 o1 b-8 o2 c8 }
+pattern rA { @bass o1 a8 a8 a8 a8 o2 a8 o1 a8 g8 a8 }
+pattern rG { @bass o1 g8 g8 g8 g8 o2 g8 o1 g8 f8 g8 }
+pattern beat { @kick_big o4 c8 @hat o7 c8 @snare o5 c8 @hat o7 c8 @kick_big o4 c8 @kick_big o4 c8 @snare o5 c8 @ohat o7 c8 }
+pattern fill { @kick_big o4 c8 @snare o5 c16 c16 @snare o5 c8 c16 c16 @tom_big o4 c8 @tom_big o3 a8 @tom_big o3 f8 @crash o6 a8 }
+
+v1 {
+  @lead_f
+  o5 d8 d8 f8 a8 o6 d8 c8 o5 a4
+  o5 g8 f8 e8 f8 d4 r4
+  o5 d8 d8 f8 b-8 o6 d8 c8 o5 b-4
+  o5 c8 e8 g8 o6 c8 o5 b-8 g8 e4
+  o5 d8 d8 f8 a8 o6 d8 f8 e4
+  o6 d8 c8 o5 a8 f8 d4 r4
+  o5 f8 g8 a8 b-8 o6 d8 c8 o5 b-4
+  o5 a2 c+4 e4
+  @lead_saw
+  o6 d4. c8 o5 a4 f4
+  o5 b-4. a8 g4 f4
+  o5 g4. f8 d4 b-4
+  o5 a2 e4 c+4
+  o5 d8 f8 a8 o6 d8 f8 e8 d8 c8
+  o5 b-8 a8 g8 f8 g8 a8 b-4
+  o6 c8 o5 b-8 a8 g8 e8 g8 o6 c4
+  o5 a2. r4
+}
+v2 { $rD $rD $rB $rC $rD $rD $rB $rA $rD $rB $rG $rA $rD $rB $rC $rA }
+v3 { [$beat]3 $fill [$beat]3 $fill [$beat]3 $fill [$beat]3 $fill }

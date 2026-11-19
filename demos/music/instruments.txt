@@ -1,0 +1,42 @@
+; instruments.txt - the instrument bank shared by every tune (format: tools/sound/musfmt.py)
+; ad / sr = SID envelope: attack decay / sustain release (hex nibbles)
+;
+; --- leads
+inst lead      pulse    ad=09 sr=a9 pw=500 pwsweep=24 vib=3,10          ; the classic pulse lead
+inst lead_saw  saw      ad=08 sr=98 vib=2,12                            ; brighter, cutting
+inst lead_soft tri      ad=2a sr=a8 vib=2,16                            ; flute-like
+inst brass     saw      ad=25 sr=a9 vib=2,14 filter=lp res=4 cutoff=20 fsweep=4  ; opens up: fanfares
+inst bell      tri      ad=09 sr=09 gap=0                               ; struck, decays away
+inst pluck     pulse    ad=05 sr=05 pw=300 gap=0                        ; short plucked notes
+; --- chords (arpeggios cycle every frame - the C64 sound)
+inst arp_maj   pulse    ad=0a sr=78 pw=600 pwsweep=16 arp=major
+inst arp_min   pulse    ad=0a sr=78 pw=600 pwsweep=16 arp=minor
+inst arp_pow   pulse    ad=0a sr=a8 pw=500 arp=power
+inst arp_sus   pulse    ad=0a sr=78 pw=600 pwsweep=16 arp=sus4
+; --- bass
+inst bass      saw      ad=08 sr=a8 gap=1 filter=lp res=9 cutoff=48 fsweep=-2    ; resonant, closing
+inst bass_p    pulse    ad=0a sr=8a pw=300 pwsweep=8 gap=1              ; buzzy, sweeping
+; --- drums (the note sets the starting pitch)
+inst kick      tri      wave1=noise ad=08 sr=00 slide=-96 gap=0         ; e.g. c4
+inst snare     noise    wave1=pulse ad=08 sr=08 gap=0                   ; e.g. c5 .. g5
+inst hat       noise    ad=02 sr=02 gap=0                               ; e.g. c7
+inst tom       tri      wave1=noise ad=08 sr=00 slide=-40 gap=0         ; e.g. g3 .. c4
+; --- added later (appended: the numbers of the ones above never change)
+inst arp_dim   pulse    ad=0a sr=78 pw=600 pwsweep=16 arp=dim           ; diminished chord
+inst drone     saw      ad=6c sr=ca gap=4                               ; slow swell, long release
+inst crash     noise    ad=0c sr=0c gap=0                               ; cymbal, e.g. a6 .. c7
+inst ohat      noise    ad=05 sr=05 gap=0                               ; open hi-hat, e.g. c7
+inst taiko     tri      wave1=noise ad=0b sr=00 slide=-24 gap=0         ; deep drum, e.g. c3 .. g3
+inst pad       pulse    ad=8a sr=a9 pw=300 pwsweep=10 gap=4             ; slow swell
+inst arp_aug   pulse    ad=0a sr=78 pw=600 pwsweep=16 arp=aug           ; augmented chord
+inst lead_f    pulse    ad=09 sr=a9 pw=400 pwsweep=20 vib=3,10 filter=bp res=12 cutoff=30 fsweep=3  ; wah lead
+inst click     noise    ad=03 sr=03 gap=0                               ; high tek / woodblock, e.g. c7
+inst arp_smaj  tri      ad=2a sr=68 arp=major                           ; soft triangle chord (gentle)
+inst arp_smin  tri      ad=2a sr=68 arp=minor
+inst pad_big   pulse    ad=6a sr=e9 pw=700 pwsweep=14 vib=1,30 gap=4  ; fuller, louder swell
+inst kick_big  pulse    wave1=noise pw=600 ad=09 sr=00 slide=-140 gap=0  ; punchy, booming kick, e.g. c4
+inst tom_big   tri      wave1=noise ad=0a sr=00 slide=-32 gap=0         ; deep, ringing tom, e.g. g3 .. c4
+inst ney       tri      ad=2a sr=a8 vib=2,16 legato                     ; lead_soft, slurred (flute)
+inst lead_leg  pulse    ad=09 sr=a9 pw=500 pwsweep=24 vib=3,10 legato   ; lead, slurred
+inst pad_pulse pulse    ad=0a sr=8a pw=300 pwsweep=8 gap=1              ; buzzy pulse pad (the sound picked for the title, victory, prehistoric)
+inst horn      saw      ad=8a sr=c8 vib=2,30 gap=3 filter=lp res=6 cutoff=10 fsweep=2  ; war horn: slow swell, dark to bright

@@ -1,0 +1,34 @@
+; world2_skies.mus - BIG WORLD, high skies.  D major, tempo 6 (125 BPM).
+; Bright and soaring: the pulse lead over a buzzy eighth-note bass and a
+; light kit, a fill every fourth bar.  16 bars:
+; D A Bm G | D A G A | Bm G D A | G A D D.
+tempo 6
+
+pattern bD { @bass_p o2 d8 d8 a8 d8 o3 d8 o2 d8 a8 d8 }
+pattern bA { @bass_p o2 a8 a8 o3 e8 o2 a8 o3 a8 o2 a8 o3 e8 o2 a8 }
+pattern bB { @bass_p o2 b8 b8 o3 f+8 o2 b8 o3 b8 o2 b8 o3 f+8 o2 b8 }
+pattern bG { @bass_p o2 g8 g8 o3 d8 o2 g8 o3 g8 o2 g8 o3 d8 o2 g8 }
+pattern beat { @kick o4 c8 @hat o7 c8 @snare o5 c8 @hat o7 c8 @kick o4 c8 @kick o4 c8 @snare o5 c8 @hat o7 c8 }
+pattern fill { @kick o4 c8 @hat o7 c8 @snare o5 c8 c16 c16 @tom o4 c8 @tom o3 a8 @tom o3 f8 @crash o6 a8 }
+
+v1 {
+  @lead
+  o5 d8 f+8 a4 a8 b8 a4
+  o5 e8 a8 o6 c+4 o5 b8 a8 e4
+  o5 f+8 d8 f+4 b8 a8 f+4
+  o5 g4 b4 a8 g8 f+8 e8
+  o5 d8 f+8 a4 a8 b8 o6 d4
+  o6 c+8 o5 a8 e4 a8 b8 o6 c+4
+  o6 d8 c+8 o5 b4 g8 a8 b4
+  o5 a2. r4
+  o6 d4. c+8 o5 b4 a4
+  o5 b4. a8 g4 f+4
+  o5 a4. g8 f+4 e4
+  o5 e2 c+4 e4
+  o5 d4 e8 f+8 g4 b4
+  o5 a4 o6 c+8 d8 e4 c+4
+  o6 d2 o5 a4 f+4
+  o5 d2. r4
+}
+v2 { $bD $bA $bB $bG $bD $bA $bG $bA $bB $bG $bD $bA $bG $bA $bD $bD }
+v3 { [$beat]3 $fill [$beat]3 $fill [$beat]3 $fill [$beat]3 $fill }

@@ -30,7 +30,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "tools"))
 import lzpack  # noqa: E402
 import d64write  # noqa: E402
-import gen_music  # noqa: E402
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "tools" / "sound"))
+import sidplay  # noqa: E402
 
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parent
@@ -123,8 +124,16 @@ def world_files():
     hdr = bytes([len(starts)]) + b"".join(s.to_bytes(2, "little") for s in starts)
     (BUILD / "bigworld_hdr.bin").write_bytes(hdr)
     (BUILD / "bigworld_caps.bin").write_bytes(b"".join(screen_codes(c) for c in WORLD_CAPTIONS))
-    # the music: one section a scene, SID register frames (tools/gen_music.py)
-    secs = gen_music.sections()
+    # the music: one section a scene (music/world<n>_*.mus, composed for the
+    # TimeWarrior player), turned into SID register frames by that player's
+    # Python port (tools/sound/sidplay.py): 25 registers a frame, padded to 32
+    insts = HERE / "music" / "instruments.txt"
+    secs = []
+    for path in sorted((HERE / "music").glob("world*.mus")):
+        n, bar = sidplay.tune_frames(path, insts)
+        frames = sidplay.render(path, insts, n)
+        secs.append(dict(frames=b"".join(f + bytes(7) for f in frames), nframes=n, bar=bar))
+        assert n % 256 == 0, f"{path.name}: {n} frames, not whole 8 KB pages"
     assert len(secs) == len(starts), "a music section for each scene"
     (BUILD / "bigworld_music.bin").write_bytes(b"".join(s["frames"] for s in secs))
     page, pages, bars = 0, [], []

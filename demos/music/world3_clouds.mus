@@ -1,0 +1,39 @@
+; world3_clouds.mus - BIG WORLD, above the clouds.  F major, tempo 7 (107 BPM).
+; Floating: a long flute melody over soft triangle chords and a filtered bass
+; moving root to fifth.  16 bars:
+; F C Dm Bb | F C Bb C | Dm Bb F C | Bb C F F.
+tempo 7
+
+v1 {
+  @lead_soft
+  o5 a2 g4 f4
+  o5 g2. e4
+  o5 f4 e4 d4 f4
+  o5 d2. r4
+  o5 c4 f4 a4 o6 c4
+  o5 b-4 a4 g2
+  o5 f4 g4 a4 b-4
+  o5 g2. r4
+  o5 a4. g8 f4 a4
+  o5 b-2 a4 g4
+  o5 a2 c4 f4
+  o5 e2. r4
+  o5 d4 f4 b-4 a4
+  o5 g4 b-4 o6 c4 o5 e4
+  o5 f1
+  r1
+}
+v2 {
+  @arp_smaj o3 f1 c1
+  @arp_smin o3 d1
+  @arp_smaj o3 b-1 f1 c1 b-1 c1
+  @arp_smin o3 d1
+  @arp_smaj o3 b-1 f1 c1 b-1 c1 f1 f1
+}
+v3 {
+  @bass
+  o2 f2 o3 c2   o2 c2 g2   o2 d2 a2   o1 b-2 o2 f2
+  o2 f2 o3 c2   o2 c2 g2   o1 b-2 o2 f2   o2 c2 g2
+  o2 d2 a2   o1 b-2 o2 f2   o2 f2 o3 c2   o2 c2 g2
+  o1 b-2 o2 f2   o2 c2 g2   o2 f2 o3 c2   o2 f1
+}
