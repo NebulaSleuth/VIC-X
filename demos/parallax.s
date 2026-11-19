@@ -19,6 +19,9 @@ BACK_TILES_V  = $00000          ; up to 20 KB
 FRONT_TILES_V = $05000          ; up to 48 KB
 BACK_MAP_V    = $11000          ; 8 KB each
 FRONT_MAP_V   = $13000
+.assert BACK_TILES_V + BACK_TILES_LEN <= FRONT_TILES_V, error, "back tiles overrun the front tiles"
+.assert FRONT_TILES_V + FRONT_TILES_LEN <= BACK_MAP_V, error, "front tiles overrun the back map"
+.assert BACK_MAP_V + BACK_MAP_LEN <= FRONT_MAP_V, error, "back map overruns the front map"
 
 .code
 main:

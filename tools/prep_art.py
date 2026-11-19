@@ -252,7 +252,9 @@ def main():
     front = key_magenta(load(raw, "parallax_front.jpg"))
     s = 272 / front.height
     front = shrink_rgba(front, round(front.width * s), 272)
-    x = (front.width - 512) // 2
+    # Both crop edges must fall in open sky: mirror_wrap reflects each edge onto
+    # itself, so a tree cut there becomes a trunkless tree split at the tip.
+    x = 12
     front = front.crop((x, 0, x + 512, 272))
     save(mirror_wrap(quantise(front, 96, False)), "parallax_front_wide.png")
 

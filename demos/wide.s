@@ -25,14 +25,18 @@ CPU_TEXT     = $0400 + 1 * 40 + 20  ; in the score bar
 .include "demo.inc"
 .include "assets.inc"
 
-BACK_TILES_V  = $00000          ; up to 24 KB
-FRONT_TILES_V = $06000          ; up to 56 KB
+BACK_TILES_V  = $00000          ; up to 21 KB
+FRONT_TILES_V = $05400          ; up to 59 KB, to the maps
 BACK_MAP_V    = $14000          ; 16 KB each (128 x 64 tiles)
 FRONT_MAP_V   = $18000
 ART_ROWS      = 272
 LEFT          = 32              ; the widened window's left extension
 SWITCH_FRAMES = 250
 SPRPAT        = $1C000          ; bar sprites: 6 x 64x32 x 8-bit = 12 KB
+.assert BACK_TILES_V + BACK_TILES_LEN <= FRONT_TILES_V, error, "back tiles overrun the front tiles"
+.assert FRONT_TILES_V + FRONT_TILES_LEN <= BACK_MAP_V, error, "front tiles overrun the back map"
+.assert BACK_MAP_V + BACK_MAP_LEN <= FRONT_MAP_V, error, "back map overruns the front map"
+.assert FRONT_MAP_V + FRONT_MAP_LEN <= SPRPAT, error, "front map overruns the bar sprites"
 BAR_TEXT_ROW  = 12              ; text row inside the 32-pixel bar
 BAR_BG        = 254             ; palette entries for the bar
 BAR_FG        = 255
