@@ -1,7 +1,7 @@
 # VIC-X
 
 VIC-X (working name) is a graphics and memory extension for FPGA C64s
-(Ultimate 64 Elite II, Commodore 64 Ultimate, 64C Ultimate): a 256-colour
+(Ultimate 64 Elite II, Commodore 64 Ultimate, 64C Ultimate, Commodore 77): a 256-colour
 palette, two tile/bitmap layers, a 128-sprite engine, 128 KB of VRAM, 16 MB
 of XRAM shared with the REU, and a DMA/blitter. A stock program sees no
 difference until it unlocks VIC-X.
