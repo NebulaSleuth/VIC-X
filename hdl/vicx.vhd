@@ -121,7 +121,9 @@ use work.vicx_pkg.all;
 entity vicx is
     generic (
         VRAM_BITS    : natural := 17;           -- 2^17 = 128 KB
-        CAP_SPR      : natural := 0;            -- what this build provides
+        -- what this build provides; with sprites (CAP_FEAT bit 2) also the
+        -- sprite engine's size: 128 or 64 entries, 32 or 16 a line
+        CAP_SPR      : natural := 0;
         CAP_SPRLINE  : natural := 0;
         CAP_FEAT     : std_logic_vector(7 downto 0) := x"00";
         -- optional blitter operations (CAP_BLIT, $D05B); so far bit 0,
@@ -216,11 +218,32 @@ architecture rtl of vicx is
 
     -- palette entries 0-15 (R, G, B, spare each); until the first access
     -- after a reset they follow the core's stock palette
-    signal pal_lo     : byte_array(0 to PAL_LO_SZ - 1) := (others => (others => '0'));
     signal pal_pend   : std_logic := '1';
+    -- held in LUT RAM, a byte lane (R, G, B, spare) of 16 entries each.
+    -- One store a clock (pl_we / pl_wa / pl_wd), taken in by the RAM a
+    -- clock later; until then readers take it from pl_wd. The first access
+    -- copies the stock palette in, an entry a clock (pl_cp, pl_k): until an
+    -- entry is copied its bytes read as stock, unless stored since (pl_wm).
+    type pl_mem_t is array (0 to 15) of std_logic_vector(7 downto 0);
+    type pl_lane_t is array (0 to 3) of std_logic_vector(7 downto 0);
+    -- each lane's RAM read at the four readers' entries
+    signal pl_q_lay, pl_q_vic, pl_q_cpu, pl_q_dma : pl_lane_t;
+    signal pl_we      : std_logic_vector(3 downto 0) := "0000";
+    signal pl_wa      : unsigned(3 downto 0) := (others => '0');
+    signal pl_wd      : pl_lane_t := (others => (others => '0'));
+    signal pl_cp      : std_logic := '0';
+    signal pl_k       : unsigned(3 downto 0) := (others => '0');
+    signal pl_wm      : std_logic_vector(63 downto 0) := (others => '0');
+    -- what each reader sees: a layer pixel's entry, a VIC-II colour's
+    -- entry, the CPU port's byte, the DMA's byte
+    signal pl_lay, pl_vic : std_logic_vector(23 downto 0);
+    signal pl_cpu, pl_dma : std_logic_vector(7 downto 0);
+    signal pl_cpa     : unsigned(5 downto 0);
 
     -- memories
     signal regs      : byte_array(0 to REGSPACE_SZ - 1);
+    signal regs_rd    : std_logic_vector(7 downto 0);
+    signal regs_hi    : std_logic := '0';         -- read address past the space
 
     signal vram_q     : std_logic_vector(7 downto 0);
     signal regs_q     : std_logic_vector(7 downto 0);
@@ -252,9 +275,10 @@ architecture rtl of vicx is
     -- and the request engine
     type blk_data_t is array (0 to 1) of std_logic_vector(63 downto 0);
     type blk_addr_t is array (0 to 1) of unsigned(13 downto 0);
-    type wq_addr_t  is array (0 to 15) of unsigned(16 downto 0);
-    type wq_data_t  is array (0 to 15) of std_logic_vector(15 downto 0);
-    type wq_be_t    is array (0 to 15) of std_logic_vector(1 downto 0);
+    -- the write queue: 16 entries of byte enables (34-33), data (32-17)
+    -- and VRAM address (16-0), in LUT RAM: one write a clock (the CPU's or
+    -- the DMA's), stored a clock after it is queued
+    type wq_mem_t   is array (0 to 15) of std_logic_vector(34 downto 0);
     type eng_t      is (E_IDLE, E_WREQ, E_DWREQ, E_RREQ);
     -- reads in flight, oldest first (data come back in order): a port's
     -- block, a layer's or the sprites' block, or the DMA's
@@ -262,9 +286,11 @@ architecture rtl of vicx is
     signal blk_data   : blk_data_t := (others => (others => '0'));
     signal blk_addr   : blk_addr_t := (others => (others => '0'));
     signal blk_valid  : std_logic_vector(1 downto 0) := "00";
-    signal wq_addr    : wq_addr_t := (others => (others => '0'));
-    signal wq_data    : wq_data_t := (others => (others => '0'));
-    signal wq_be      : wq_be_t := (others => "00");
+    signal wq_mem     : wq_mem_t;
+    signal wq_we      : std_logic := '0';
+    signal wq_wa      : unsigned(3 downto 0) := (others => '0');
+    signal wq_wd      : std_logic_vector(34 downto 0) := (others => '0');
+    signal wq_q       : std_logic_vector(34 downto 0);
     signal wq_rd      : unsigned(3 downto 0) := (others => '0');
     signal wq_wr      : unsigned(3 downto 0) := (others => '0');
     signal wq_count   : natural range 0 to 16 := 0;
@@ -304,16 +330,21 @@ architecture rtl of vicx is
         if HAS_LIST then c(4) := '1'; end if;
         return c;
     end function;
-    -- descriptors 0-3, and 4: the list entry being run
-    type d8_t  is array (0 to 4) of std_logic_vector(7 downto 0);
-    type d16_t is array (0 to 4) of unsigned(15 downto 0);
-    type d24_t is array (0 to 4) of unsigned(23 downto 0);
-    -- the four descriptors at $20880, as written (the fields the engine uses)
-    signal dsc_op, dsc_sp, dsc_fill, dsc_tr, dsc_next : d8_t := (others => (others => '0'));
-    signal dsc_src, dsc_dst : d24_t := (others => (others => '0'));
-    signal dsc_w, dsc_h, dsc_ss, dsc_ds : d16_t := (others => (others => '0'));
-    signal dsc_tbl    : d24_t := (others => (others => '0'));   -- remap table (+21-+23)
-    signal dsc_xs, dsc_ys : d16_t := (others => (others => '0')); -- scaled steps (+24-+27)
+    -- the descriptor about to run (the fields the engine uses): descriptors
+    -- 0-3 are read from the register space at $20880 as each starts
+    -- (DM_DLOAD), a list entry from VRAM (DM_LFETCH). The four are not kept
+    -- in flip-flops: the register space already holds them.
+    signal dsc_op, dsc_sp, dsc_fill, dsc_tr : std_logic_vector(7 downto 0) := (others => '0');
+    signal dsc_src, dsc_dst : unsigned(23 downto 0) := (others => '0');
+    signal dsc_w, dsc_h, dsc_ss, dsc_ds : unsigned(15 downto 0) := (others => '0');
+    signal dsc_tbl    : unsigned(23 downto 0) := (others => '0');   -- remap table (+21-+23)
+    signal dsc_xs, dsc_ys : unsigned(15 downto 0) := (others => '0'); -- scaled steps (+24-+27)
+    -- the descriptor loader: next byte to read, and the two reads in flight
+    -- (valid, byte offset, reads as 0 because the reset sweep has not
+    -- cleared it yet)
+    signal dl_k       : unsigned(4 downto 0) := (others => '0');
+    signal dl_v1, dl_v2, dl_z1, dl_z2 : std_logic := '0';
+    signal dl_o1, dl_o2 : unsigned(4 downto 0) := (others => '0');
     -- remap: the table, loaded from VRAM as the descriptor starts
     type lut_t is array (0 to 255) of std_logic_vector(7 downto 0);
     signal lut        : lut_t;
@@ -325,7 +356,8 @@ architecture rtl of vicx is
     type dmst_t is (DM_IDLE, DM_START, DM_BYTE, DM_RWAIT, DM_RRD, DM_RR1, DM_RR2,
                   DM_PUT, DM_FLUSH, DM_WWAIT, DM_NEXT,
                   DM_TLOAD, DM_TWAIT, DM_LUT1, DM_LUT2, DM_SEEK,
-                  DM_LFETCH, DM_LWAIT);
+                  DM_LFETCH, DM_LWAIT, DM_DLOAD, DM_NRD, DM_NR1, DM_NR2,
+                  DM_SEEK2, DM_SEEK3);
     signal dm_st      : dmst_t := DM_IDLE;
     signal dm_ret     : dmst_t := DM_IDLE;          -- where a flush goes back to
     signal dm_busy    : std_logic := '0';
@@ -350,6 +382,14 @@ architecture rtl of vicx is
     signal dm_sst, dm_dst : unsigned(15 downto 0) := (others => '0');
     signal dm_w, dm_i, dm_h, dm_r : unsigned(15 downto 0) := (others => '0');
     signal dm_x       : unsigned(15 downto 0) := (others => '0');  -- source pixel in the row
+    -- dm_x * X step (scaled copy), kept as x moves a pixel at a time
+    signal dm_xacc    : unsigned(31 downto 0) := (others => '0');
+    -- a row's start over three clocks (DM_SEEK, 2, 3): the row, row * Y
+    -- step, the destination and source offsets, last pixel * X step
+    signal dm_ra      : unsigned(15 downto 0) := (others => '0');
+    signal dm_yp      : unsigned(31 downto 0) := (others => '0');
+    signal dm_tprod, dm_sprod : unsigned(23 downto 0) := (others => '0');
+    signal dm_xw      : unsigned(31 downto 0) := (others => '0');
     signal dm_mir, dm_bwd : std_logic := '0';       -- mirror, backwards (+1 bits 6, 7)
     signal dm_sc      : std_logic := '0';           -- scaled copy
     signal dm_xs, dm_ys : unsigned(15 downto 0) := (others => '0');  -- its steps, 8.8
@@ -395,6 +435,7 @@ architecture rtl of vicx is
     constant SP_L1    : natural := 4;
     signal line_pos   : pos_t := ("000", "001", "010", "011", "100");
     constant HAS_SPR  : boolean := CAP_FEAT(2) = '1';
+    -- the sprite engine's sizes are CAP_SPR entries and CAP_SPRLINE a line
 
     -- the layers and their fetches
     -- fetch clients: layer 0, layer 1, sprites
@@ -465,6 +506,9 @@ architecture rtl of vicx is
     signal pal_r, pal_g, pal_b : pal_ram_t := (others => (others => '0'));
     signal pal_ra     : unsigned(7 downto 0);
     signal pal_q      : std_logic_vector(23 downto 0) := (others => '0');
+    signal pal_wa     : unsigned(11 downto 0);
+    signal pal_wd     : std_logic_vector(7 downto 0);
+    signal pal_we     : std_logic;
 
     -- display: the frontmost opaque layer for each pixel, then its colour
     signal vx_x       : unsigned(8 downto 0) := (others => '0');   -- window pixel
@@ -522,10 +566,6 @@ architecture rtl of vicx is
         end case;
     end function;
 
-    function pal_rgb(p : byte_array; i : natural) return std_logic_vector is
-    begin
-        return p(i * 4) & p(i * 4 + 1) & p(i * 4 + 2);
-    end function;
 
     -- the order register as places, 0 = in front: higher priority first,
     -- ties sprite engine, VIC-II, layer 0, layer 1; sprites with the behind
@@ -578,6 +618,11 @@ architecture rtl of vicx is
     end function;
 
 begin
+
+    assert not HAS_SPR or ((CAP_SPR = 128 or CAP_SPR = 64) and
+                           (CAP_SPRLINE = 32 or CAP_SPRLINE = 16))
+        report "vicx: sprites need CAP_SPR 128 or 64 and CAP_SPRLINE 32 or 16"
+        severity failure;
 
     -- the remap table: one write and one registered read a clock
     lut_mem : process (clk)
@@ -741,6 +786,7 @@ begin
 
     gen_spr : if HAS_SPR generate
         spr : entity work.vicx_sprites
+            generic map (N_ENT => CAP_SPR, N_LINE => CAP_SPRLINE)
             port map (
                 clk => clk, reset => reset,
                 tw_we => sp_tw_we, tw_addr => sp_tw_a(9 downto 0), tw_data => sp_tw_d,
@@ -760,57 +806,140 @@ begin
     end generate;
 
     -- palette entries 16-255 for the display: follow every write to them
-    -- in the register space, and the clear after reset
-    pal_mem : process (clk)
-        variable wa : unsigned(11 downto 0);
-        variable wd : std_logic_vector(7 downto 0);
+    -- in the register space, and the clear after reset. One process per
+    -- colour, each with a single write enable and an unconditional read,
+    -- so that GHDL's synthesis (for Yosys) infers them as RAM as Quartus
+    -- does; split by a case, GHDL builds them from flip-flops.
+    pal_wa <= sweep_ptr when sweeping = '1' else mem_waddr(11 downto 0);
+    pal_wd <= x"00" when sweeping = '1' else mem_wdata;
+    pal_we <= '1' when (regs_we = '1' or sweeping = '1')
+                       and pal_wa(11 downto 10) = "00" else '0';
+
+    pal_mem_r : process (clk)
     begin
         if rising_edge(clk) then
-            if sweeping = '1' then
-                wa := sweep_ptr;
-                wd := x"00";
-            else
-                wa := mem_waddr(11 downto 0);
-                wd := mem_wdata;
+            if pal_we = '1' and pal_wa(1 downto 0) = "00" then
+                pal_r(to_integer(pal_wa(9 downto 2))) <= pal_wd;
             end if;
-            if (regs_we = '1' or sweeping = '1') and wa(11 downto 10) = "00" then
-                case wa(1 downto 0) is
-                    when "00"   => pal_r(to_integer(wa(9 downto 2))) <= wd;
-                    when "01"   => pal_g(to_integer(wa(9 downto 2))) <= wd;
-                    when "10"   => pal_b(to_integer(wa(9 downto 2))) <= wd;
-                    when others => null;
-                end case;
+            pal_q(23 downto 16) <= pal_r(to_integer(pal_ra));
+        end if;
+    end process;
+
+    pal_mem_g : process (clk)
+    begin
+        if rising_edge(clk) then
+            if pal_we = '1' and pal_wa(1 downto 0) = "01" then
+                pal_g(to_integer(pal_wa(9 downto 2))) <= pal_wd;
             end if;
-            pal_q <= pal_r(to_integer(pal_ra)) & pal_g(to_integer(pal_ra)) &
-                     pal_b(to_integer(pal_ra));
+            pal_q(15 downto 8) <= pal_g(to_integer(pal_ra));
+        end if;
+    end process;
+
+    pal_mem_b : process (clk)
+    begin
+        if rising_edge(clk) then
+            if pal_we = '1' and pal_wa(1 downto 0) = "10" then
+                pal_b(to_integer(pal_wa(9 downto 2))) <= pal_wd;
+            end if;
+            pal_q(7 downto 0) <= pal_b(to_integer(pal_ra));
         end if;
     end process;
 
     pal_ra <= unsigned(w_idx);
 
+    -- the register space: one write with its data chosen first, and a read
+    -- that always happens (at address 0 when past the space, then replaced
+    -- by $FF), so that GHDL's synthesis infers RAM here too
     regs_mem : process (clk)
         variable wa : natural range 0 to 4095;
+        variable wd : std_logic_vector(7 downto 0);
+        variable ra : natural range 0 to 4095;
     begin
         if rising_edge(clk) then
             if sweeping = '1' then
                 wa := to_integer(sweep_ptr);
+                wd := x"00";
             else
                 wa := to_integer(mem_waddr(11 downto 0));
+                wd := mem_wdata;
             end if;
             if (regs_we = '1' or sweeping = '1') and wa < REGSPACE_SZ then
-                if sweeping = '1' then
-                    regs(wa) <= x"00";
-                else
-                    regs(wa) <= mem_wdata;
+                regs(wa) <= wd;
+            end if;
+            ra := to_integer(mem_raddr(11 downto 0));
+            if ra < REGSPACE_SZ then
+                regs_hi <= '0';
+            else
+                ra := 0;
+                regs_hi <= '1';
+            end if;
+            regs_rd <= regs(ra);
+        end if;
+    end process;
+
+    regs_q <= x"FF" when regs_hi = '1' else regs_rd;
+
+    -- palette entries 0-15 (see pal_pend): the RAM, and what each reader sees
+    pl_cpa <= port_addr(0)(5 downto 0) when cpu_addr(7 downto 0) = x"4F" else
+              port_addr(1)(5 downto 0);
+
+    pl_lanes : for l in 0 to 3 generate
+        signal lane : pl_mem_t;
+    begin
+        process (clk)
+        begin
+            if rising_edge(clk) then
+                if pl_we(l) = '1' then
+                    lane(to_integer(pl_wa)) <= pl_wd(l);
                 end if;
             end if;
-            if to_integer(mem_raddr(11 downto 0)) < REGSPACE_SZ then
-                regs_q <= regs(to_integer(mem_raddr(11 downto 0)));
+        end process;
+        pl_q_lay(l) <= lane(to_integer(unsigned(b_idx(3 downto 0))));
+        pl_q_vic(l) <= lane(to_integer(unsigned(vic_idx)));
+        pl_q_cpu(l) <= lane(to_integer(pl_cpa(5 downto 2)));
+        pl_q_dma(l) <= lane(to_integer(dm_s(5 downto 2)));
+    end generate;
+
+    pl_read : process (pl_q_lay, pl_q_vic, pl_q_cpu, pl_q_dma, pl_we, pl_wa, pl_wd,
+                       pl_cp, pl_k, pl_wm, stock_rgb, b_idx, vic_idx, pl_cpa, dm_s)
+        -- byte b (0-63), with q its lane's RAM output at b's entry: stored
+        -- this clock, not copied yet, or in the RAM
+        impure function pl_byte(b : natural; q : std_logic_vector(7 downto 0))
+            return std_logic_vector is
+            variable e : natural range 0 to 15;
+            variable l : natural range 0 to 3;
+        begin
+            e := b / 4; l := b mod 4;
+            if pl_we(l) = '1' and to_integer(pl_wa) = e then
+                return pl_wd(l);
+            elsif pl_cp = '1' and e >= to_integer(pl_k) and pl_wm(b) = '0' then
+                return stock_byte(stock_rgb, b);
             else
-                regs_q <= x"FF";
+                return q;
+            end if;
+        end function;
+        variable li, vi, cb, db : natural range 0 to 63;
+    begin
+        li := 4 * to_integer(unsigned(b_idx(3 downto 0)));
+        vi := 4 * to_integer(unsigned(vic_idx));
+        cb := to_integer(pl_cpa);
+        db := to_integer(dm_s(5 downto 0));
+        pl_lay <= pl_byte(li, pl_q_lay(0)) & pl_byte(li + 1, pl_q_lay(1)) & pl_byte(li + 2, pl_q_lay(2));
+        pl_vic <= pl_byte(vi, pl_q_vic(0)) & pl_byte(vi + 1, pl_q_vic(1)) & pl_byte(vi + 2, pl_q_vic(2));
+        pl_cpu <= pl_byte(cb, pl_q_cpu(cb mod 4));
+        pl_dma <= pl_byte(db, pl_q_dma(db mod 4));
+    end process;
+
+    -- the external VRAM write queue (see wq_mem_t)
+    wq_ram : process (clk)
+    begin
+        if rising_edge(clk) then
+            if wq_we = '1' then
+                wq_mem(to_integer(wq_wa)) <= wq_wd;
             end if;
         end if;
     end process;
+    wq_q <= wq_mem(to_integer(wq_rd));
 
     ---------------------------------------------------------------------------
     -- registers, unlock and ports
@@ -821,8 +950,11 @@ begin
         variable a       : unsigned(17 downto 0);
         variable rgn     : region_t;
         variable pi      : natural range 0 to PAL_LO_SZ - 1;
-        variable pal_v   : byte_array(0 to PAL_LO_SZ - 1);
         variable pend_v  : std_logic;
+        variable pw_v    : boolean;                -- this clock's palette store
+        variable pw_a    : unsigned(5 downto 0);
+        variable pw_d    : std_logic_vector(7 downto 0);
+        variable pc_go   : boolean;                -- the stock copy starts
         variable v       : std_logic_vector(7 downto 0);
         variable bd      : blk_data_t;
         variable bv      : std_logic_vector(1 downto 0);
@@ -856,7 +988,12 @@ begin
         variable wbe     : std_logic_vector(1 downto 0);
         variable wbv     : std_logic_vector(7 downto 0);
         variable dn      : natural range 0 to 4;
+        variable ra12    : unsigned(11 downto 0);
+        variable nx      : std_logic_vector(7 downto 0);
         variable rbusy   : boolean;                -- the register-space write port is taken
+        variable sn_v    : boolean;                -- this clock's register-space store
+        variable sn_a    : unsigned(11 downto 0);
+        variable sn_d    : std_logic_vector(7 downto 0);
         variable rqn     : natural range 0 to 2;
         variable k0, k1  : rqk_t;
         variable u0, u1  : natural range 0 to 2;
@@ -865,36 +1002,34 @@ begin
         -- a store to the register space (CPU port or DMA): what the display
         -- and the DMA engine keep copies of
         -- descriptor q's field at byte off
-        procedure dsc_put(q : natural range 0 to 4; off : natural range 0 to 31;
-                          d : std_logic_vector(7 downto 0)) is
+        procedure dsc_put(off : natural range 0 to 31; d : std_logic_vector(7 downto 0)) is
         begin
             case off is
-                when 0  => dsc_op(q) <= d;
-                when 1  => dsc_sp(q) <= d;
-                when 2  => dsc_src(q)(7 downto 0)   <= unsigned(d);
-                when 3  => dsc_src(q)(15 downto 8)  <= unsigned(d);
-                when 4  => dsc_src(q)(23 downto 16) <= unsigned(d);
-                when 6  => dsc_dst(q)(7 downto 0)   <= unsigned(d);
-                when 7  => dsc_dst(q)(15 downto 8)  <= unsigned(d);
-                when 8  => dsc_dst(q)(23 downto 16) <= unsigned(d);
-                when 10 => dsc_w(q)(7 downto 0)   <= unsigned(d);
-                when 11 => dsc_w(q)(15 downto 8)  <= unsigned(d);
-                when 12 => dsc_h(q)(7 downto 0)   <= unsigned(d);
-                when 13 => dsc_h(q)(15 downto 8)  <= unsigned(d);
-                when 14 => dsc_ss(q)(7 downto 0)  <= unsigned(d);
-                when 15 => dsc_ss(q)(15 downto 8) <= unsigned(d);
-                when 16 => dsc_ds(q)(7 downto 0)  <= unsigned(d);
-                when 17 => dsc_ds(q)(15 downto 8) <= unsigned(d);
-                when 18 => dsc_fill(q) <= d;
-                when 19 => dsc_tr(q)   <= d;
-                when 20 => dsc_next(q) <= d;
-                when 21 => dsc_tbl(q)(7 downto 0)   <= unsigned(d);
-                when 22 => dsc_tbl(q)(15 downto 8)  <= unsigned(d);
-                when 23 => dsc_tbl(q)(23 downto 16) <= unsigned(d);
-                when 24 => dsc_xs(q)(7 downto 0)  <= unsigned(d);
-                when 25 => dsc_xs(q)(15 downto 8) <= unsigned(d);
-                when 26 => dsc_ys(q)(7 downto 0)  <= unsigned(d);
-                when 27 => dsc_ys(q)(15 downto 8) <= unsigned(d);
+                when 0  => dsc_op <= d;
+                when 1  => dsc_sp <= d;
+                when 2  => dsc_src(7 downto 0)   <= unsigned(d);
+                when 3  => dsc_src(15 downto 8)  <= unsigned(d);
+                when 4  => dsc_src(23 downto 16) <= unsigned(d);
+                when 6  => dsc_dst(7 downto 0)   <= unsigned(d);
+                when 7  => dsc_dst(15 downto 8)  <= unsigned(d);
+                when 8  => dsc_dst(23 downto 16) <= unsigned(d);
+                when 10 => dsc_w(7 downto 0)   <= unsigned(d);
+                when 11 => dsc_w(15 downto 8)  <= unsigned(d);
+                when 12 => dsc_h(7 downto 0)   <= unsigned(d);
+                when 13 => dsc_h(15 downto 8)  <= unsigned(d);
+                when 14 => dsc_ss(7 downto 0)  <= unsigned(d);
+                when 15 => dsc_ss(15 downto 8) <= unsigned(d);
+                when 16 => dsc_ds(7 downto 0)  <= unsigned(d);
+                when 17 => dsc_ds(15 downto 8) <= unsigned(d);
+                when 18 => dsc_fill <= d;
+                when 19 => dsc_tr   <= d;
+                when 21 => dsc_tbl(7 downto 0)   <= unsigned(d);
+                when 22 => dsc_tbl(15 downto 8)  <= unsigned(d);
+                when 23 => dsc_tbl(23 downto 16) <= unsigned(d);
+                when 24 => dsc_xs(7 downto 0)  <= unsigned(d);
+                when 25 => dsc_xs(15 downto 8) <= unsigned(d);
+                when 26 => dsc_ys(7 downto 0)  <= unsigned(d);
+                when 27 => dsc_ys(15 downto 8) <= unsigned(d);
                 when others => null;
             end case;
         end procedure;
@@ -920,9 +1055,6 @@ begin
                 when 16#845# => s_wide(3) <= unsigned(d);
                 when others  => null;
             end case;
-            if ra(11 downto 7) = "10001" then           -- DMA descriptors
-                dsc_put(to_integer(ra(6 downto 5)), to_integer(ra(4 downto 0)), d);
-            end if;
             case to_integer(ra) is                       -- the DMA list's address
                 when 16#85C# => dm_lreg(7 downto 0)   <= unsigned(d);
                 when 16#85D# => dm_lreg(15 downto 8)  <= unsigned(d);
@@ -933,11 +1065,10 @@ begin
 
         -- source pixel x of the rows starting at sr and tr: dm_s, dm_t
         -- (expand: a source byte per 8 pixels; mirror: x goes to w - 1 - x)
-        procedure dm_pos(sr, tr : unsigned(23 downto 0); x : unsigned(15 downto 0)) is
+        procedure dm_pos(sr, tr : unsigned(23 downto 0); x : unsigned(15 downto 0);
+                         xp : unsigned(31 downto 0)) is   -- xp: x * X step
             variable so, dof : unsigned(15 downto 0);
-            variable xp      : unsigned(31 downto 0);
         begin
-            xp := x * dm_xs;
             if dm_ex = '1' then
                 so := shift_right(x, 3);
             elsif HAS_SCALED and dm_sc = '1' then
@@ -949,6 +1080,7 @@ begin
             dm_s <= sr + resize(so, 24);
             dm_t <= tr + resize(dof, 24);
             dm_x <= x;
+            dm_xacc <= xp;
         end procedure;
 
         -- where a DMA address in a space goes: kind and SDRAM address
@@ -990,6 +1122,8 @@ begin
             u_valid <= "000";
             sp_pack <= '0';
             rbusy   := vic_cs = '1' and cpu_wr = '1';
+            sn_v    := false;
+            wq_we   <= '0';
             dmok    := false;
 
             bd := blk_data;
@@ -1116,8 +1250,9 @@ begin
                 irq_stat(2) <= '1';
             end if;
 
-            pal_v  := pal_lo;
             pend_v := pal_pend;
+            pw_v   := false;
+            pc_go  := false;
 
             if vic_cs = '1' and cpu_wr = '1' then
                 if cpu_addr(9 downto 8) /= "00" then
@@ -1164,12 +1299,12 @@ begin
                                             if EXT_VRAM then
                                                 -- queue it, and update the copies
                                                 if wqc < 16 then
-                                                    wq_addr(to_integer(wqw)) <= a(16 downto 0);
-                                                    wq_data(to_integer(wqw)) <= cpu_din & cpu_din;
+                                                    wq_we <= '1';
+                                                    wq_wa <= wqw;
                                                     if a(0) = '1' then
-                                                        wq_be(to_integer(wqw)) <= "10";
+                                                        wq_wd <= "10" & cpu_din & cpu_din & std_logic_vector(a(16 downto 0));
                                                     else
-                                                        wq_be(to_integer(wqw)) <= "01";
+                                                        wq_wd <= "01" & cpu_din & cpu_din & std_logic_vector(a(16 downto 0));
                                                     end if;
                                                     wqw := wqw + 1;
                                                     wqc := wqc + 1;
@@ -1188,19 +1323,18 @@ begin
                                             end if;
                                         when REG_PALLO =>
                                             if pend_v = '1' then
-                                                for i in 0 to PAL_LO_SZ - 1 loop
-                                                    pal_v(i) := stock_byte(stock_rgb, i);
-                                                end loop;
                                                 pend_v := '0';
+                                                pc_go  := true;
                                             end if;
-                                            pi := to_integer(a(5 downto 0));
-                                            pal_v(pi) := cpu_din;
+                                            pw_v := true;
+                                            pw_a := a(5 downto 0);
+                                            pw_d := cpu_din;
                                         when REG_REGS =>
                                             -- during the sweep, a write the sweep has not reached
                                             -- yet would be cleared again: drop it
                                             if sweeping = '0' or a(11 downto 0) < sweep_ptr then
                                                 regs_we <= '1';
-                                                regs_snoop(a(11 downto 0), cpu_din);
+                                                sn_v := true; sn_a := a(11 downto 0); sn_d := cpu_din;
                                             end if;
                                         when others =>
                                             null;               -- unmapped: ignored
@@ -1220,7 +1354,9 @@ begin
                                         dm_n    <= to_integer(unsigned(cpu_din(1 downto 0)));
                                         dm_ran  <= (others => '0');
                                         dm_irqp <= '0';
-                                        dm_st   <= DM_START;
+                                        dl_k    <= (others => '0');
+                                        dl_v1   <= '0';
+                                        dm_st   <= DM_DLOAD;
                                     elsif HAS_LIST and dm_busy = '0' then
                                         dm_busy <= '1';
                                         dm_list <= '1';
@@ -1271,17 +1407,19 @@ begin
                         a := port_addr(p);
                         rgn := region_of(a);
                         if rgn = REG_PALLO and pend_v = '1' then
-                            for i in 0 to PAL_LO_SZ - 1 loop
-                                pal_v(i) := stock_byte(stock_rgb, i);
-                            end loop;
                             pend_v := '0';
+                            pc_go  := true;
+                            rd_pal <= stock_byte(stock_rgb, to_integer(a(5 downto 0)));
+                        elsif pend_v = '1' then
+                            rd_pal <= stock_byte(stock_rgb, to_integer(a(5 downto 0)));
+                        else
+                            rd_pal <= pl_cpu;
                         end if;
                         if rgn = REG_REGS and sweeping = '1' and a(11 downto 0) >= sweep_ptr then
                             rgn := REG_ZERO;            -- not swept yet: reads as cleared
                         end if;
                         rd_kind   <= RD_PORT;
                         rd_region <= rgn;
-                        rd_pal    <= pal_v(to_integer(a(5 downto 0)));
                         if EXT_VRAM and rgn = REG_VRAM then
                             bi := to_integer(a(2 downto 0));
                             if has_blk(bv, ba, p, a) then
@@ -1315,42 +1453,42 @@ begin
                     when DM_START =>
                         dn := dm_n;
                         dm_ran(dn) <= '1';
-                        if dsc_sp(dn)(5) = '1' then
+                        if dsc_sp(5) = '1' then
                             dm_irqp <= '1';
                         end if;
-                        dm_op   <= dsc_op(dn)(2 downto 0);
-                        if dsc_op(dn) = x"06" then dm_sc <= '1'; else dm_sc <= '0'; end if;
-                        dm_xs   <= dsc_xs(dn);
-                        dm_ys   <= dsc_ys(dn);
-                        dm_s0   <= dsc_src(dn);
-                        dm_t0   <= dsc_dst(dn);
-                        if dsc_op(dn) = x"03" or dsc_op(dn) = x"04" then
+                        dm_op   <= dsc_op(2 downto 0);
+                        if dsc_op = x"06" then dm_sc <= '1'; else dm_sc <= '0'; end if;
+                        dm_xs   <= dsc_xs;
+                        dm_ys   <= dsc_ys;
+                        dm_s0   <= dsc_src;
+                        dm_t0   <= dsc_dst;
+                        if dsc_op = x"03" or dsc_op = x"04" then
                             dm_ex <= '1';
                         else
                             dm_ex <= '0';
                         end if;
                         if HAS_DIR then
-                            dm_mir <= dsc_sp(dn)(6);
-                            dm_bwd <= dsc_sp(dn)(7);
+                            dm_mir <= dsc_sp(6);
+                            dm_bwd <= dsc_sp(7);
                         else
                             dm_mir <= '0';
                             dm_bwd <= '0';
                         end if;
-                        dm_ss   <= dsc_sp(dn)(1 downto 0);
-                        dm_ds   <= dsc_sp(dn)(3 downto 2);
-                        dm_fill <= dsc_fill(dn);
-                        dm_tr   <= dsc_tr(dn);
-                        dm_s    <= dsc_src(dn);
-                        dm_srow <= dsc_src(dn);
-                        dm_t    <= dsc_dst(dn);
-                        dm_trow <= dsc_dst(dn);
-                        dm_w    <= dsc_w(dn);
-                        dm_sst  <= dsc_ss(dn);
-                        dm_dst  <= dsc_ds(dn);
+                        dm_ss   <= dsc_sp(1 downto 0);
+                        dm_ds   <= dsc_sp(3 downto 2);
+                        dm_fill <= dsc_fill;
+                        dm_tr   <= dsc_tr;
+                        dm_s    <= dsc_src;
+                        dm_srow <= dsc_src;
+                        dm_t    <= dsc_dst;
+                        dm_trow <= dsc_dst;
+                        dm_w    <= dsc_w;
+                        dm_sst  <= dsc_ss;
+                        dm_dst  <= dsc_ds;
                         dm_i    <= (others => '0');
                         dm_r    <= (others => '0');
-                        if dsc_sp(dn)(4) = '1' then
-                            dm_h <= dsc_h(dn);
+                        if dsc_sp(4) = '1' then
+                            dm_h <= dsc_h;
                         else
                             dm_h <= to_unsigned(1, 16);
                         end if;
@@ -1358,20 +1496,20 @@ begin
                         -- reserved operations and spaces, and empty transfers, do nothing
                         -- (and optional ones this build lacks: expand without
                         -- CAP_BLIT bit 0, the direction bits 6-7)
-                        if unsigned(dsc_op(dn)) > 6 or
-                           (dsc_op(dn) = x"06" and not HAS_SCALED) or
-                           (unsigned(dsc_op(dn)) > 2 and unsigned(dsc_op(dn)) < 5 and not HAS_EXPAND) or
-                           (dsc_op(dn) = x"05" and not HAS_REMAP) or
-                           (dsc_sp(dn)(7 downto 6) /= "00" and not HAS_DIR) or dsc_sp(dn)(3 downto 2) = "11" or
-                           (dsc_op(dn) /= x"01" and dsc_sp(dn)(1 downto 0) = "11") or
-                           dsc_w(dn) = 0 or (dsc_sp(dn)(4) = '1' and dsc_h(dn) = 0) then
+                        if unsigned(dsc_op) > 6 or
+                           (dsc_op = x"06" and not HAS_SCALED) or
+                           (unsigned(dsc_op) > 2 and unsigned(dsc_op) < 5 and not HAS_EXPAND) or
+                           (dsc_op = x"05" and not HAS_REMAP) or
+                           (dsc_sp(7 downto 6) /= "00" and not HAS_DIR) or dsc_sp(3 downto 2) = "11" or
+                           (dsc_op /= x"01" and dsc_sp(1 downto 0) = "11") or
+                           dsc_w = 0 or (dsc_sp(4) = '1' and dsc_h = 0) then
                             dm_st <= DM_NEXT;
                         else
-                            if dsc_sp(dn)(3 downto 2) = "00" or
-                               (dsc_op(dn) /= x"01" and dsc_sp(dn)(1 downto 0) = "00") then
+                            if dsc_sp(3 downto 2) = "00" or
+                               (dsc_op /= x"01" and dsc_sp(1 downto 0) = "00") then
                                 dm_c64 <= '1';
                             end if;
-                            dm_tbl <= dsc_tbl(dn);
+                            dm_tbl <= dsc_tbl;
                             dm_ti  <= (others => '0');
                             dm_st  <= DM_SEEK;
                         end if;
@@ -1381,18 +1519,26 @@ begin
                     -- row's first byte (backwards: its last pixel)
                     when DM_SEEK =>
                         if dm_bwd = '1' then ra := dm_h - 1 - dm_r; else ra := dm_r; end if;
-                        yp := ra * dm_ys;
-                        if HAS_SCALED and dm_sc = '1' then ri := yp(23 downto 8); else ri := ra; end if;
-                        prod := signed('0' & ri) * signed(dm_sst);
-                        sr   := dm_s0 + unsigned(prod(23 downto 0));
+                        dm_ra <= ra;
+                        dm_yp <= ra * dm_ys;
                         prod := signed('0' & ra) * signed(dm_dst);
-                        tr2  := dm_t0 + unsigned(prod(23 downto 0));
+                        dm_tprod <= unsigned(prod(23 downto 0));
+                        dm_xw <= (dm_w - 1) * dm_xs;
+                        dm_st <= DM_SEEK2;
+                    when DM_SEEK2 =>
+                        if HAS_SCALED and dm_sc = '1' then ri := dm_yp(23 downto 8); else ri := dm_ra; end if;
+                        prod := signed('0' & ri) * signed(dm_sst);
+                        dm_sprod <= unsigned(prod(23 downto 0));
+                        dm_st <= DM_SEEK3;
+                    when DM_SEEK3 =>
+                        sr  := dm_s0 + dm_sprod;
+                        tr2 := dm_t0 + dm_tprod;
                         dm_srow <= sr;
                         dm_trow <= tr2;
                         if dm_bwd = '1' then
-                            dm_pos(sr, tr2, dm_w - 1);
+                            dm_pos(sr, tr2, dm_w - 1, dm_xw);
                         else
-                            dm_pos(sr, tr2, (others => '0'));
+                            dm_pos(sr, tr2, (others => '0'), (others => '0'));
                         end if;
                         if HAS_REMAP and dm_op = "101" and dm_r = 0 then
                             dm_st <= DM_TLOAD;          -- the table, once
@@ -1416,7 +1562,7 @@ begin
                                     end if;
                                     dm_st <= DM_IDLE;
                                 else
-                                    dsc_put(4, to_integer(dm_lk), byte_of(dm_cdata, ta(2 downto 0)));
+                                    dsc_put(to_integer(dm_lk), byte_of(dm_cdata, ta(2 downto 0)));
                                     if dm_lk = 27 then
                                         dm_n   <= 4;
                                         dm_ran <= (others => '0');
@@ -1486,10 +1632,18 @@ begin
                                     when 2 =>
                                         dm_st <= DM_RRD;
                                     when 3 =>
-                                        if pend_v = '1' then
-                                            dval := stock_byte(stock_rgb, to_integer(dm_s(5 downto 0)));
+                                        if pend_v = '1' or pal_pend = '1' then
+                                            -- not copied yet (or the copy starts this
+                                            -- clock): the stock byte, or the CPU's
+                                            if pw_v and pw_a = dm_s(5 downto 0) then
+                                                dval := pw_d;
+                                            else
+                                                dval := stock_byte(stock_rgb, to_integer(dm_s(5 downto 0)));
+                                            end if;
+                                        elsif pw_v and pw_a = dm_s(5 downto 0) then
+                                            dval := pw_d;           -- the CPU's store this clock
                                         else
-                                            dval := pal_v(to_integer(dm_s(5 downto 0)));
+                                            dval := pl_dma;
                                         end if;
                                         dput  := true;
                                         dsrcv := true;
@@ -1565,10 +1719,13 @@ begin
                             -- VRAM: into the port write queue, updating the copies
                             -- (not while a layer or the sprites fetch: queued
                             -- writes go before their reads)
-                            if wqc < 16 and u_busy = "000" then
-                                wq_addr(to_integer(wqw)) <= dm_wa(16 downto 1) & '0';
-                                wq_data(to_integer(wqw)) <= dm_wd;
-                                wq_be(to_integer(wqw))   <= dm_wbe;
+                            -- (and not in a clock the CPU writes: the queue
+                            -- takes one entry a clock)
+                            if wqc < 16 and u_busy = "000" and
+                               not (vic_cs = '1' and cpu_wr = '1') then
+                                wq_we <= '1';
+                                wq_wa <= wqw;
+                                wq_wd <= dm_wbe & dm_wd & std_logic_vector(dm_wa(16 downto 1)) & '0';
                                 wqw := wqw + 1;
                                 wqc := wqc + 1;
                                 a := resize(dm_wa(16 downto 0) - to_unsigned(VRAM_BASE mod 131072, 17), 18);
@@ -1618,16 +1775,70 @@ begin
                             else
                                 dm_st <= DM_LFETCH;
                             end if;
-                        elsif unsigned(dsc_next(dn)) < 4 and
-                           dm_ran(to_integer(unsigned(dsc_next(dn)(1 downto 0)))) = '0' then
-                            dm_n  <= to_integer(unsigned(dsc_next(dn)(1 downto 0)));
-                            dm_st <= DM_START;
+                        else
+                            dm_st <= DM_NRD;
+                        end if;
+
+                    -- the finished descriptor's next field (+20), as it is now
+                    when DM_NRD =>
+                        if not (vic_cs = '1' and cpu_rd = '1') then
+                            ra12 := "10001" & to_unsigned(dm_n mod 4, 2) & "10100";
+                            mem_raddr <= "10" & "0000" & ra12;
+                            if sweeping = '1' and ra12 >= sweep_ptr then
+                                dl_z1 <= '1';
+                            else
+                                dl_z1 <= '0';
+                            end if;
+                            dm_st <= DM_NR1;
+                        end if;
+                    when DM_NR1 =>
+                        dm_st <= DM_NR2;
+                    when DM_NR2 =>
+                        if dl_z1 = '1' then nx := x"00"; else nx := regs_q; end if;
+                        if unsigned(nx) < 4 and
+                           dm_ran(to_integer(unsigned(nx(1 downto 0)))) = '0' then
+                            dm_n  <= to_integer(unsigned(nx(1 downto 0)));
+                            dl_k  <= (others => '0');
+                            dl_v1 <= '0';
+                            dm_st <= DM_DLOAD;
                         else
                             dm_busy <= '0';
                             if dm_irqp = '1' then
                                 irq_stat(1) <= '1';
                             end if;
                             dm_st <= DM_IDLE;
+                        end if;
+
+                    -- descriptor dm_n's bytes 0-27 from the register space:
+                    -- a read each clock the CPU leaves the port, its byte
+                    -- taken two clocks later
+                    when DM_DLOAD =>
+                        if dl_v2 = '1' then
+                            if dl_z2 = '1' then
+                                dsc_put(to_integer(dl_o2), x"00");
+                            else
+                                dsc_put(to_integer(dl_o2), regs_q);
+                            end if;
+                        end if;
+                        dl_v2 <= dl_v1;
+                        dl_o2 <= dl_o1;
+                        dl_z2 <= dl_z1;
+                        dl_v1 <= '0';
+                        if dl_k < 28 then
+                            if not (vic_cs = '1' and cpu_rd = '1') then
+                                ra12 := "10001" & to_unsigned(dm_n mod 4, 2) & dl_k;
+                                mem_raddr <= "10" & "0000" & ra12;
+                                dl_v1 <= '1';
+                                dl_o1 <= dl_k;
+                                if sweeping = '1' and ra12 >= sweep_ptr then
+                                    dl_z1 <= '1';
+                                else
+                                    dl_z1 <= '0';
+                                end if;
+                                dl_k <= dl_k + 1;
+                            end if;
+                        elsif dl_v1 = '0' and dl_v2 = '0' then
+                            dm_st <= DM_START;
                         end if;
                 end case;
 
@@ -1654,7 +1865,9 @@ begin
                 end if;
 
                 -- a register-space store waits for a clock without a CPU write
-                if dput and dkind = 2 and vic_cs = '1' and cpu_wr = '1' and not dskip then
+                if dput and not dskip and
+                   ((dkind = 2 and vic_cs = '1' and cpu_wr = '1') or
+                    (dkind = 3 and ((vic_cs = '1' and cpu_wr = '1') or pl_cp = '1'))) then
                     dput   := false;
                     dm_val <= dval;
                     dm_st  <= DM_PUT;
@@ -1690,31 +1903,56 @@ begin
                                 regs_we   <= '1';
                                 mem_waddr <= "10" & dm_t(15 downto 0);
                                 mem_wdata <= dval;
-                                regs_snoop(dm_t(11 downto 0), dval);
+                                sn_v := true; sn_a := dm_t(11 downto 0); sn_d := dval;
                             when 3 =>
                                 if pend_v = '1' then
-                                    for k in 0 to PAL_LO_SZ - 1 loop
-                                        pal_v(k) := stock_byte(stock_rgb, k);
-                                    end loop;
                                     pend_v := '0';
+                                    pc_go  := true;
                                 end if;
-                                pal_v(to_integer(dm_t(5 downto 0))) := dval;
+                                pw_v := true;
+                                pw_a := dm_t(5 downto 0);
+                                pw_d := dval;
                             when others =>
                                 null;
                         end case;
                     end if;
                     dm_i  <= dm_i + 1;
                     if dm_bwd = '1' then
-                        dm_pos(dm_srow, dm_trow, dm_x - 1);
+                        dm_pos(dm_srow, dm_trow, dm_x - 1, dm_xacc - resize(dm_xs, 32));
                     else
-                        dm_pos(dm_srow, dm_trow, dm_x + 1);
+                        dm_pos(dm_srow, dm_trow, dm_x + 1, dm_xacc + resize(dm_xs, 32));
                     end if;
                     dm_st <= DM_BYTE;
                 end if;
             end if;
 
-            pal_lo   <= pal_v;
             pal_pend <= pend_v;
+            pl_we    <= "0000";
+            if pw_v then
+                pl_wa <= pw_a(5 downto 2);
+                pl_we(to_integer(pw_a(1 downto 0))) <= '1';
+                pl_wd <= (others => pw_d);
+            elsif pl_cp = '1' then
+                pl_wa <= pl_k;
+                for l in 0 to 3 loop
+                    pl_we(l) <= not pl_wm(4 * to_integer(pl_k) + l);
+                    pl_wd(l) <= stock_byte(stock_rgb, 4 * to_integer(pl_k) + l);
+                end loop;
+                pl_k <= pl_k + 1;
+                if pl_k = 15 then
+                    pl_cp <= '0';
+                end if;
+            end if;
+            if pc_go then
+                pl_cp <= '1';
+                pl_k  <= (others => '0');
+                pl_wm <= (others => '0');
+                if pw_v then
+                    pl_wm(to_integer(pw_a)) <= '1';
+                end if;
+            elsif pw_v and pl_cp = '1' then
+                pl_wm(to_integer(pw_a)) <= '1';
+            end if;
 
             -- start of a raster line: latch CTRL and the layer order (the
             -- layers take their own setups)
@@ -1737,12 +1975,19 @@ begin
                     regs_we   <= '1';
                     mem_waddr <= "10" & "0000" & sp_paddr;
                     mem_wdata <= sp_pdata;
-                    regs_snoop(sp_paddr, sp_pdata);
+                    sn_v := true; sn_a := sp_paddr; sn_d := sp_pdata;
                     sp_pack   <= '1';
                 end if;
                 if sp_irq = '1' then
                     irq_stat(0) <= '1';
                 end if;
+            end if;
+
+            -- what the display and the DMA keep from the register space:
+            -- one store a clock at most (the CPU's, the DMA's or the
+            -- sprites', which take turns), so one decoder serves all three
+            if sn_v then
+                regs_snoop(sn_a, sn_d);
             end if;
 
             -- external VRAM engine: start the next request.  Queued writes
@@ -1757,15 +2002,15 @@ begin
                 end if;
             end loop;
             if EXT_VRAM and eng = E_IDLE then
-                if wqc > 0 and wq_count = 0 then
-                    null;               -- a write queued this clock: next clock
+                if (wqc > 0 and wq_count = 0) or (wq_we = '1' and wq_wa = wq_rd) then
+                    null;               -- the oldest write is not in the queue's RAM yet
                 elsif wq_count > 0 and rqn > 0 then
                     null;               -- the write waits for the reads in flight
                 elsif wq_count > 0 then
                     addr_r <= std_logic_vector(to_unsigned(VRAM_BASE, 25) +
-                                               resize(wq_addr(to_integer(wq_rd)), 25));
-                    din_r  <= wq_data(to_integer(wq_rd));
-                    be_r   <= wq_be(to_integer(wq_rd));
+                                               resize(unsigned(wq_q(16 downto 0)), 25));
+                    din_r  <= wq_q(32 downto 17);
+                    be_r   <= wq_q(34 downto 33);
                     we_r  <= '1';
                     req_r <= '1';
                     eng   <= E_WREQ;
@@ -1878,6 +2123,7 @@ begin
                 port_addr <= (others => (others => '0'));
                 port_step <= (others => (others => '0'));
                 pal_pend  <= '1';
+                pl_cp     <= '0';
                 sweeping  <= '1';
                 sweep_ptr <= to_unsigned(PAL_LO_SZ, 12);
                 vram_we   <= '0';
@@ -1895,20 +2141,19 @@ begin
                 dm_c64    <= '0';
                 dm_wbe    <= "00";
                 dmr_req   <= '0';
-                dsc_op    <= (others => (others => '0'));
-                dsc_sp    <= (others => (others => '0'));
-                dsc_fill  <= (others => (others => '0'));
-                dsc_tr    <= (others => (others => '0'));
-                dsc_next  <= (others => (others => '0'));
-                dsc_tbl   <= (others => (others => '0'));
-                dsc_xs    <= (others => (others => '0'));
-                dsc_ys    <= (others => (others => '0'));
-                dsc_src   <= (others => (others => '0'));
-                dsc_dst   <= (others => (others => '0'));
-                dsc_w     <= (others => (others => '0'));
-                dsc_h     <= (others => (others => '0'));
-                dsc_ss    <= (others => (others => '0'));
-                dsc_ds    <= (others => (others => '0'));
+                dsc_op    <= (others => '0');
+                dsc_sp    <= (others => '0');
+                dsc_fill  <= (others => '0');
+                dsc_tr    <= (others => '0');
+                dsc_tbl   <= (others => '0');
+                dsc_xs    <= (others => '0');
+                dsc_ys    <= (others => '0');
+                dsc_src   <= (others => '0');
+                dsc_dst   <= (others => '0');
+                dsc_w     <= (others => '0');
+                dsc_h     <= (others => '0');
+                dsc_ss    <= (others => '0');
+                dsc_ds    <= (others => '0');
                 -- the copies go; a fetch in flight is thrown away when it
                 -- lands; queued writes still go out
                 blk_valid <= "00";
@@ -1949,7 +2194,7 @@ begin
             elsif pal_pend = '1' then
                 lay_rgb := stock_rgb(li);
             else
-                lay_rgb := pal_rgb(pal_lo, li);
+                lay_rgb := pl_lay;
             end if;
 
             -- where the 320x200 area starts in the line (learned from the
@@ -1991,7 +2236,7 @@ begin
             end if;
             i := to_integer(unsigned(vic_idx));
             if lc(3) = '1' and pal_pend = '0' then
-                vc := pal_rgb(pal_lo, i);
+                vc := pl_vic;
             else
                 vc := vic_rgb;
             end if;

@@ -1,4 +1,8 @@
--- VIC-X sprite engine: 128 entries, up to 32 sprites and 640 pixels a line.
+-- VIC-X sprite engine: N_ENT entries (128 or 64), up to N_LINE sprites
+-- (32 or 16) and 640 pixels a line; the MiSTer build has 128 and 32.
+-- With fewer than 128 entries the table's higher entries are ignored (they
+-- are still stored in the register space); CAP_SPR and CAP_SPRLINE say
+-- which sizes this build has.
 --
 -- Table: every write to the register space's sprite table ($20400-$207FF)
 -- comes in on tw_*, into a live copy; at frame_start the live copy is
@@ -6,7 +10,7 @@
 --
 -- Lines: while window line y shows, the engine prepares line y + 1: it
 -- picks the entries that cover it (table order; the first that would pass
--- 32 sprites or 640 pixels drops out with every higher entry, and sets the
+-- N_LINE sprites or 640 pixels drops out with every higher entry, and sets the
 -- overflow flag), fetches each one's pattern row through f_* (as the
 -- layers do; the next row is fetched while one is drawn) and draws it into
 -- one of two line buffers: per pixel a front and a behind palette index (a
@@ -30,6 +34,10 @@ use ieee.std_logic_1164.all;
 use ieee.numeric_std.all;
 
 entity vicx_sprites is
+    generic (
+        N_ENT       : natural := 128;                       -- 64 or 128
+        N_LINE      : natural := 32                         -- 16 or 32
+    );
     port (
         clk         : in  std_logic;
         reset       : in  std_logic;
@@ -71,30 +79,53 @@ end entity;
 
 architecture rtl of vicx_sprites is
 
+    constant ENT_HI : natural := N_ENT - 1;
+    constant LN_HI  : natural := N_LINE - 1;
+    constant LBW    : natural := 16 + N_LINE;   -- line buffer: mask, behind, front
+    constant FW     : natural := N_LINE + 2;    -- collision queue: list, mask
+
     signal l_width   : natural range 0 to 511 := 320;  -- the prepared line's width
 
-    type byte_ram is array (0 to 127) of std_logic_vector(7 downto 0);
-    type entry_ram is array (0 to 127) of std_logic_vector(63 downto 0);
-    type lbuf_t is array (0 to 511) of std_logic_vector(47 downto 0);  -- mask, behind, front
-    type sel_t is array (0 to 31) of std_logic_vector(7 downto 0);
-    type nib_t is array (0 to 31) of std_logic_vector(3 downto 0);
+    type byte_ram is array (0 to ENT_HI) of std_logic_vector(7 downto 0);
+    type entry_ram is array (0 to ENT_HI) of std_logic_vector(63 downto 0);
+    type lbuf_t is array (0 to 511) of std_logic_vector(LBW - 1 downto 0);  -- mask, behind, front
+    type sel_t is array (0 to LN_HI) of std_logic_vector(7 downto 0);
+    type nib_t is array (0 to LN_HI) of std_logic_vector(3 downto 0);
     type sel2_t is array (0 to 3) of sel_t;      -- four lines' lists
     type nib2_t is array (0 to 3) of nib_t;
     type rowbuf_t is array (0 to 7) of std_logic_vector(63 downto 0);  -- up to 8 blocks
     type rowbuf2_t is array (0 to 1) of rowbuf_t;
     type off2_t is array (0 to 1) of unsigned(2 downto 0);
     type pair_ram is array (0 to 127) of std_logic_vector(15 downto 0);
-    type seen_ram is array (0 to 127) of std_logic_vector(127 downto 0);
-    type fifo_t is array (0 to 255) of std_logic_vector(33 downto 0);
-    type ent_list is array (0 to 31) of std_logic_vector(63 downto 0);
-    type row6_t is array (0 to 31) of unsigned(5 downto 0);
+    type seen_ram is array (0 to ENT_HI) of std_logic_vector(ENT_HI downto 0);
+    type fifo_t is array (0 to 255) of std_logic_vector(FW - 1 downto 0);
+    type ent_list is array (0 to LN_HI) of std_logic_vector(63 downto 0);
+    type row6_t is array (0 to LN_HI) of unsigned(5 downto 0);
+
+    -- selection: entry e's row on window line y (wraps at 1024), whether
+    -- the line crosses it, and the pixels it takes on the line
+    function spr_row(e : std_logic_vector(63 downto 0); y : unsigned(9 downto 0)) return unsigned is
+    begin
+        return y - (unsigned(e(25 downto 24)) & unsigned(e(23 downto 16)));
+    end function;
+    function spr_on_line(e : std_logic_vector(63 downto 0); y : unsigned(9 downto 0)) return boolean is
+    begin
+        return e(26) = '1' and
+               to_integer(spr_row(e, y)) < 8 * 2 ** to_integer(unsigned(e(13 downto 12)));
+    end function;
+    function spr_pixels(e : std_logic_vector(63 downto 0)) return natural is
+        variable w : natural range 0 to 128;
+    begin
+        w := 8 * 2 ** to_integer(unsigned(e(11 downto 10)));
+        if e(53) = '1' then return 2 * w; else return w; end if;
+    end function;
 
     -- the table: live (eight byte lanes) and latched
     signal lat_rd    : std_logic_vector(63 downto 0);
-    signal lat_ra    : natural range 0 to 127 := 0;
+    signal lat_ra    : natural range 0 to ENT_HI := 0;
     signal lat_busy  : std_logic := '0';
     signal lat_v     : std_logic := '0';
-    signal lat_k     : natural range 0 to 127 := 0;
+    signal lat_k     : natural range 0 to ENT_HI := 0;
     signal latched   : entry_ram := (others => (others => '0'));
     signal ent_q     : std_logic_vector(63 downto 0) := (others => '0');
 
@@ -105,32 +136,52 @@ architecture rtl of vicx_sprites is
     signal d_ra, d_wa, s_wa : natural range 0 to 511 := 0;
     signal s_ra      : natural range 0 to 511;
     signal d_we, s_we : std_logic := '0';
-    signal d_wd      : std_logic_vector(47 downto 0) := (others => '0');
+    signal d_wd      : std_logic_vector(LBW - 1 downto 0) := (others => '0');
     signal we0, we1  : std_logic;
     signal wa0, wa1, ra0, ra1 : natural range 0 to 511;
-    signal wd0, wd1  : std_logic_vector(47 downto 0);
-    signal q0, q1    : std_logic_vector(47 downto 0) := (others => '0');
-    signal d_q, s_q  : std_logic_vector(47 downto 0);
+    signal wd0, wd1  : std_logic_vector(LBW - 1 downto 0);
+    signal q0, q1    : std_logic_vector(LBW - 1 downto 0) := (others => '0');
+    signal d_q, s_q  : std_logic_vector(LBW - 1 downto 0);
 
     -- preparing the next line: select, then fetch rows and draw them
     type st_t is (P_IDLE, P_SEL, P_SEL2, P_RUN);
     signal st        : st_t := P_IDLE;
     signal py        : unsigned(9 downto 0) := (others => '0');   -- window line prepared
-    signal se        : natural range 0 to 127 := 0;               -- entry scanned
-    signal nsel      : natural range 0 to 32 := 0;
+    signal se        : natural range 0 to ENT_HI := 0;               -- entry scanned
+    signal nsel      : natural range 0 to N_LINE := 0;
     signal pixels    : natural range 0 to 1024 := 0;
     signal ovf_next  : std_logic := '0';          -- the prepared line dropped sprites
     signal sel_e     : sel2_t := (others => (others => (others => '0')));
     signal sel_mem   : nib2_t := (others => (others => (others => '0')));
     signal sel_hit   : nib2_t := (others => (others => (others => '0')));
-    signal sel_ent   : ent_list := (others => (others => '0'));
-    signal sel_r     : row6_t := (others => (others => '0'));
+    -- the selected sprites' entries and rows, in LUT RAM: written as each
+    -- is selected (sel_we, the same test the selection makes), read by
+    -- the row fetch (fk) and the drawing (dk) in the same clock
+    signal sel_ent   : ent_list;
+    signal sel_r     : row6_t;
+    signal sel_we    : std_logic;
+    signal sel_rv    : unsigned(5 downto 0);
+    signal sel_q_f, sel_q_d : std_logic_vector(63 downto 0);
+    signal sel_r_f   : unsigned(5 downto 0);
     -- fetching rows into two row buffers
     type fst_t is (F_NEXT, F_BLK, F_DONE);
     signal fst       : fst_t := F_DONE;
-    signal fk        : natural range 0 to 32 := 0;                -- sprite whose row is fetched
+    signal fk        : natural range 0 to N_LINE := 0;                -- sprite whose row is fetched
     signal rdy       : std_logic_vector(1 downto 0) := "00";      -- row buffer filled
-    signal rbuf      : rowbuf2_t := (others => (others => (others => '0')));
+    -- the two row buffers, 8 blocks each, in LUT RAM at slot & block:
+    -- written a clock after the block arrives (the drawing starts on a
+    -- slot a clock after rdy, and the fetch refills one only after the
+    -- drawing has let it go), read at the pixel being drawn (dr_bpos)
+    type rb_mem_t is array (0 to 15) of std_logic_vector(63 downto 0);
+    signal rb_mem    : rb_mem_t;
+    signal rb_we     : std_logic := '0';
+    signal rb_wa     : unsigned(3 downto 0) := (others => '0');
+    signal rb_wd     : std_logic_vector(63 downto 0) := (others => '0');
+    signal rb_q      : std_logic_vector(63 downto 0);
+    -- the pixel being drawn: its pixel in the sprite's row (after doubling
+    -- and flip X), and its byte in the row buffer
+    signal dr_px     : natural range 0 to 255;
+    signal dr_bpos   : natural range 0 to 511;
     signal r_addr    : unsigned(16 downto 0) := (others => '0');  -- row start
     signal r_k       : natural range 0 to 7 := 0;                 -- block of the row
     signal r_off     : off2_t := (others => (others => '0'));     -- row start in its first block
@@ -143,39 +194,39 @@ architecture rtl of vicx_sprites is
     -- drawing
     type dst_t is (D_WAIT, D_DRAW, D_GAP, D_DONE);
     signal dst       : dst_t := D_DONE;
-    signal dk        : natural range 0 to 32 := 0;                -- sprite being drawn
+    signal dk        : natural range 0 to N_LINE := 0;                -- sprite being drawn
     signal di        : natural range 0 to 128 := 0;               -- its pixel
     -- the draw pipeline: address now, buffer data two clocks on, write then
     signal dp1_v, dp2_v : std_logic := '0';
     signal dp1_sx, dp2_sx : natural range 0 to 511 := 0;
     signal dp1_c, dp2_c : std_logic_vector(7 downto 0) := (others => '0');
     signal dp1_beh, dp2_beh : std_logic := '0';
-    signal dp1_bit, dp2_bit : natural range 0 to 31 := 0;
+    signal dp1_bit, dp2_bit : natural range 0 to LN_HI := 0;
 
     -- display
     signal shown_on  : std_logic := '0';
-    signal last_m    : std_logic_vector(31 downto 0) := (others => '0');
+    signal last_m    : std_logic_vector(LN_HI downto 0) := (others => '0');
     signal sel_cb_bit : unsigned(1 downto 0) := "00";  -- the sel list the shown line uses
     signal sel_nb     : unsigned(1 downto 0) := "01";  -- ... the one being selected
 
     -- collisions
     signal fifo      : fifo_t := (others => (others => '0'));
     signal f_wp, f_rp : unsigned(7 downto 0) := (others => '0');
-    signal fifo_q    : std_logic_vector(33 downto 0) := (others => '0');
+    signal fifo_q    : std_logic_vector(FW - 1 downto 0) := (others => '0');
     signal fifo_we   : std_logic := '0';
     signal f_wp_d    : unsigned(7 downto 0) := (others => '0');  -- entries in the RAM
     signal fifo_wa   : unsigned(7 downto 0) := (others => '0');
-    signal fifo_wd   : std_logic_vector(33 downto 0) := (others => '0');
+    signal fifo_wd   : std_logic_vector(FW - 1 downto 0) := (others => '0');
     signal pairs_we  : std_logic := '0';
     signal pairs_wa  : natural range 0 to 127 := 0;
     signal pairs_wd  : std_logic_vector(15 downto 0) := (others => '0');
     signal pairs_ra  : natural range 0 to 127 := 0;
     signal pairs_q   : std_logic_vector(15 downto 0) := (others => '0');
-    signal c_mask    : std_logic_vector(31 downto 0) := (others => '0');
+    signal c_mask    : std_logic_vector(LN_HI downto 0) := (others => '0');
     signal c_cb      : natural range 0 to 3 := 0;
     signal c_e1      : std_logic_vector(7 downto 0) := (others => '0');
-    signal c_j       : std_logic_vector(31 downto 0) := (others => '0');
-    signal c_row     : std_logic_vector(127 downto 0) := (others => '0');
+    signal c_j       : std_logic_vector(LN_HI downto 0) := (others => '0');
+    signal c_row     : std_logic_vector(ENT_HI downto 0) := (others => '0');
     type cst_t is (C_IDLE, C_TAKE, C_LOW, C_RD, C_LOAD, C_PAIRS);
     signal cst       : cst_t := C_IDLE;
     signal pairs     : pair_ram := (others => (others => '0'));
@@ -184,11 +235,11 @@ architecture rtl of vicx_sprites is
     signal overflow  : std_logic := '0';
     -- pairs seen this frame: row e1, bit e2
     signal seen      : seen_ram := (others => (others => '0'));
-    signal seen_ra   : natural range 0 to 127 := 0;
-    signal seen_wa   : natural range 0 to 127 := 0;
-    signal seen_q    : std_logic_vector(127 downto 0) := (others => '0');
+    signal seen_ra   : natural range 0 to ENT_HI := 0;
+    signal seen_wa   : natural range 0 to ENT_HI := 0;
+    signal seen_q    : std_logic_vector(ENT_HI downto 0) := (others => '0');
     signal seen_we   : std_logic := '0';
-    signal seen_wd   : std_logic_vector(127 downto 0) := (others => '0');
+    signal seen_wd   : std_logic_vector(ENT_HI downto 0) := (others => '0');
 
     -- publishing
     type pst_t is (W_IDLE, W_WAIT, W_STAT, W_PAIRS, W_PDATA, W_CLEAR);
@@ -198,12 +249,12 @@ architecture rtl of vicx_sprites is
     signal paddr_r   : unsigned(11 downto 0) := (others => '0');
     signal pdata_r   : std_logic_vector(7 downto 0) := (others => '0');
     signal irq_r     : std_logic := '0';
-    signal clr_i     : natural range 0 to 128 := 128;
+    signal clr_i     : natural range 0 to N_ENT := N_ENT;
     signal pdata_wait : std_logic := '0';
 
-    function lowest(v : std_logic_vector(31 downto 0)) return natural is
+    function lowest(v : std_logic_vector) return natural is
     begin
-        for i in 0 to 31 loop
+        for i in v'reverse_range loop
             if v(i) = '1' then
                 return i;
             end if;
@@ -211,9 +262,9 @@ architecture rtl of vicx_sprites is
         return 0;
     end function;
 
-    function two_or_more(v : std_logic_vector(31 downto 0)) return boolean is
+    function two_or_more(v : std_logic_vector) return boolean is
     begin
-        return (v and std_logic_vector(unsigned(v) - 1)) /= x"00000000";
+        return unsigned(v and std_logic_vector(unsigned(v) - 1)) /= 0;
     end function;
 
 begin
@@ -237,8 +288,9 @@ begin
         process (clk)
         begin
             if rising_edge(clk) then
-                if tw_we = '1' and to_integer(tw_addr(2 downto 0)) = l then
-                    lane(to_integer(tw_addr(9 downto 3))) <= tw_data;
+                if tw_we = '1' and to_integer(tw_addr(2 downto 0)) = l and
+                   to_integer(tw_addr(9 downto 3)) < N_ENT then
+                    lane(to_integer(tw_addr(9 downto 3)) mod N_ENT) <= tw_data;
                 end if;
                 lat_rd(8 * l + 7 downto 8 * l) <= lane(lat_ra);
             end if;
@@ -321,6 +373,50 @@ begin
         end if;
     end process;
 
+    -- the selected sprites' list (see sel_we): the entry the selection
+    -- takes this clock, at nsel
+    sel_we <= '1' when st = P_SEL2 and spr_on_line(ent_q, py) and
+                       not (nsel >= N_LINE or pixels + spr_pixels(ent_q) > 640) else '0';
+    sel_rv <= spr_row(ent_q, py)(5 downto 0);
+    sel_mem_p : process (clk)
+    begin
+        if rising_edge(clk) then
+            if sel_we = '1' then
+                sel_ent(nsel mod N_LINE) <= ent_q;
+                sel_r(nsel mod N_LINE)   <= sel_rv;
+            end if;
+        end if;
+    end process;
+    sel_q_f <= sel_ent(fk mod N_LINE);
+    sel_r_f <= sel_r(fk mod N_LINE);
+    sel_q_d <= sel_ent(dk mod N_LINE);
+
+    -- the pixel being drawn (see dr_px, dr_bpos): entry sel_q_d, pixel di
+    dr_pix : process (sel_q_d, di, dk, r_off)
+        variable w, px : natural range 0 to 255;
+    begin
+        -- (outside D_DRAW di may be past the sprite: any value will do)
+        w := 8 * 2 ** to_integer(unsigned(sel_q_d(11 downto 10)));
+        if sel_q_d(53) = '1' then px := di / 2; else px := di; end if;
+        if sel_q_d(14) = '1' and px < w then px := w - 1 - px; end if;  -- flip X
+        dr_px <= px;
+        if sel_q_d(52) = '1' then
+            dr_bpos <= to_integer(r_off(dk mod 2)) + px;
+        else
+            dr_bpos <= to_integer(r_off(dk mod 2)) + px / 2;
+        end if;
+    end process;
+
+    rb_mem_p : process (clk)
+    begin
+        if rising_edge(clk) then
+            if rb_we = '1' then
+                rb_mem(to_integer(rb_wa)) <= rb_wd;
+            end if;
+        end if;
+    end process;
+    rb_q <= rb_mem((dk mod 2) * 8 + (dr_bpos / 8) mod 8);
+
     ---------------------------------------------------------------------------
 
     main : process (clk)
@@ -337,14 +433,14 @@ begin
         variable px     : natural range 0 to 127;
         variable c      : std_logic_vector(7 downto 0);
         variable b      : std_logic_vector(7 downto 0);
-        variable cur    : std_logic_vector(47 downto 0);
-        variable m      : std_logic_vector(31 downto 0);
-        variable jm     : std_logic_vector(31 downto 0);
-        variable i, j   : natural range 0 to 31;
-        variable e2     : natural range 0 to 127;
+        variable cur    : std_logic_vector(LBW - 1 downto 0);
+        variable m      : std_logic_vector(LN_HI downto 0);
+        variable jm     : std_logic_vector(LN_HI downto 0);
+        variable i, j   : natural range 0 to LN_HI;
+        variable e2     : natural range 0 to ENT_HI;
         variable cb     : natural range 0 to 3;
         variable nb     : natural range 0 to 3;
-        variable rw     : std_logic_vector(127 downto 0);
+        variable rw     : std_logic_vector(ENT_HI downto 0);
         variable stop   : boolean;
         variable slot   : natural range 0 to 1;
         variable bpos   : natural range 0 to 127;
@@ -359,6 +455,7 @@ begin
             irq_r   <= '0';
             lat_v   <= '0';
             got     := false;
+            rb_we   <= '0';
 
             -- latch the table at the start of each frame: lane read at
             -- lat_ra, written to entry lat_k the clock after
@@ -368,7 +465,7 @@ begin
             elsif lat_busy = '1' then
                 lat_v <= '1';
                 lat_k <= lat_ra;
-                if lat_ra = 127 then
+                if lat_ra = ENT_HI then
                     lat_busy <= '0';
                 else
                     lat_ra <= lat_ra + 1;
@@ -423,32 +520,24 @@ begin
 
                 when P_SEL2 =>
                     e := ent_q;
-                    stop := se = 127;
+                    stop := se = ENT_HI;
                     -- +0 X low, +1 X high/sizes/flips, +2 Y low, +3 Y high/on/behind/groups
-                    if e(26) = '1' then
-                        h := 8 * 2 ** to_integer(unsigned(e(13 downto 12)));
-                        yv := unsigned(e(25 downto 24)) & unsigned(e(23 downto 16));
-                        rowv := py - yv;                                     -- wraps at 1024
-                        if to_integer(rowv) < h then
-                            w  := 8 * 2 ** to_integer(unsigned(e(11 downto 10)));
-                            sw := w;
-                            if e(53) = '1' then sw := 2 * w; end if;
-                            if nsel >= 32 or pixels + sw > 640 then
-                                ovf_next <= '1';
-                                stop := true;                                -- the rest drop out
+                    if spr_on_line(e, py) then
+                        sw := spr_pixels(e);
+                        if nsel >= N_LINE or pixels + sw > 640 then
+                            ovf_next <= '1';
+                            stop := true;                                    -- the rest drop out
+                        else
+                            -- (sel_ent and sel_r: see sel_we)
+                            pixels <= pixels + sw;
+                            sel_e(nb)(nsel) <= std_logic_vector(to_unsigned(se, 8));
+                            sel_mem(nb)(nsel) <= e(31 downto 28);
+                            if e(59 downto 56) /= "0000" then
+                                sel_hit(nb)(nsel) <= e(59 downto 56);
                             else
-                                pixels <= pixels + sw;
-                                sel_ent(nsel) <= e;
-                                sel_r(nsel) <= rowv(5 downto 0);
-                                sel_e(nb)(nsel) <= std_logic_vector(to_unsigned(se, 8));
-                                sel_mem(nb)(nsel) <= e(31 downto 28);
-                                if e(59 downto 56) /= "0000" then
-                                    sel_hit(nb)(nsel) <= e(59 downto 56);
-                                else
-                                    sel_hit(nb)(nsel) <= e(31 downto 28);
-                                end if;
-                                nsel <= nsel + 1;
+                                sel_hit(nb)(nsel) <= e(31 downto 28);
                             end if;
+                            nsel <= nsel + 1;
                         end if;
                     end if;
                     if stop then
@@ -472,14 +561,20 @@ begin
                     if fk >= nsel then
                         fst <= F_DONE;
                     elsif rdy(slot) = '0' then
-                        e := sel_ent(fk);
+                        e := sel_q_f;
                         h := 8 * 2 ** to_integer(unsigned(e(13 downto 12)));
                         w := 8 * 2 ** to_integer(unsigned(e(11 downto 10)));
-                        row := to_integer(sel_r(fk));
+                        row := to_integer(sel_r_f);
                         if e(15) = '1' then row := h - 1 - row; end if;    -- flip Y
                         if e(52) = '1' then rl := w; else rl := w / 2; end if;
-                        ra := shift_left(resize(unsigned(e(47 downto 32)), 22), 5) +
-                              to_unsigned(row * rl, 22);
+                        -- row * row length (w or w / 2 bytes, a power of two)
+                        if e(52) = '1' then
+                            ra := shift_left(resize(unsigned(e(47 downto 32)), 22), 5) +
+                                  shift_left(to_unsigned(row, 22), 3 + to_integer(unsigned(e(11 downto 10))));
+                        else
+                            ra := shift_left(resize(unsigned(e(47 downto 32)), 22), 5) +
+                                  shift_left(to_unsigned(row, 22), 2 + to_integer(unsigned(e(11 downto 10))));
+                        end if;
                         r_addr <= ra(16 downto 0);
                         r_k    <= 0;
                         r_off(slot) <= ra(2 downto 0);
@@ -489,7 +584,9 @@ begin
                     end if;
                 when F_BLK =>
                     if got then
-                        rbuf(slot)(r_k) <= dat;
+                        rb_we <= '1';
+                        rb_wa <= to_unsigned(slot, 1) & to_unsigned(r_k, 3);
+                        rb_wd <= dat;
                         if r_k < 7 then
                             r_k <= r_k + 1;
                         end if;
@@ -520,7 +617,7 @@ begin
                         dst <= D_DRAW;
                     end if;
                 when D_DRAW =>
-                    e := sel_ent(dk);
+                    e := sel_q_d;
                     w := 8 * 2 ** to_integer(unsigned(e(11 downto 10)));
                     sw := w;
                     if e(53) = '1' then sw := 2 * w; end if;
@@ -529,14 +626,12 @@ begin
                         dst <= D_GAP;
                     else
                         sx := (unsigned(e(9 downto 8)) & unsigned(e(7 downto 0))) + to_unsigned(di, 10);
-                        if e(53) = '1' then px := di / 2; else px := di; end if;
-                        if e(14) = '1' then px := w - 1 - px; end if;       -- flip X
+                        px   := dr_px;
+                        bpos := dr_bpos;
                         if e(52) = '1' then
-                            bpos := to_integer(r_off(slot)) + px;
-                            c := rbuf(slot)(bpos / 8)(8 * (bpos mod 8) + 7 downto 8 * (bpos mod 8));
+                            c := rb_q(8 * (bpos mod 8) + 7 downto 8 * (bpos mod 8));
                         else
-                            bpos := to_integer(r_off(slot)) + px / 2;
-                            b := rbuf(slot)(bpos / 8)(8 * (bpos mod 8) + 7 downto 8 * (bpos mod 8));
+                            b := rb_q(8 * (bpos mod 8) + 7 downto 8 * (bpos mod 8));
                             if px mod 2 = 0 then
                                 c := x"0" & b(7 downto 4);
                             else
@@ -571,7 +666,7 @@ begin
             if x_done = '1' then
                 s_we <= '1';
                 s_wa <= to_integer(x);
-                m := s_q(47 downto 16);
+                m := s_q(LBW - 1 downto 16);
                 if shown_on = '1' and two_or_more(m) and m /= last_m and f_wp + 1 /= f_rp then
                     fifo_we <= '1';
                     fifo_wd <= std_logic_vector(sel_cb_bit) & m;
@@ -588,12 +683,12 @@ begin
                         cst <= C_TAKE;                      -- the entry comes next clock
                     end if;
                 when C_TAKE =>
-                    c_mask <= fifo_q(31 downto 0);
-                    c_cb   <= to_integer(unsigned(fifo_q(33 downto 32)));
+                    c_mask <= fifo_q(LN_HI downto 0);
+                    c_cb   <= to_integer(unsigned(fifo_q(FW - 1 downto FW - 2)));
                     f_rp   <= f_rp + 1;
                     -- a pixel from three lines back: its list is being
                     -- reused for the next line, so it is dropped
-                    if unsigned(fifo_q(33 downto 32)) /= sel_nb then
+                    if unsigned(fifo_q(FW - 1 downto FW - 2)) /= sel_nb then
                         cst <= C_LOW;
                     else
                         cst <= C_IDLE;
@@ -607,7 +702,7 @@ begin
                     else
                         i := lowest(m);
                         jm := (others => '0');
-                        for k in 0 to 31 loop
+                        for k in 0 to LN_HI loop
                             if k > i and m(k) = '1' and
                                ((sel_mem(cb)(i) and sel_hit(cb)(k)) /= "0000" or
                                 (sel_mem(cb)(k) and sel_hit(cb)(i)) /= "0000") then
@@ -616,10 +711,10 @@ begin
                         end loop;
                         m(i)   := '0';
                         c_mask <= m;
-                        if jm /= x"00000000" then
+                        if unsigned(jm) /= 0 then
                             c_j     <= jm;
                             c_e1    <= sel_e(cb)(i);
-                            seen_ra <= to_integer(unsigned(sel_e(cb)(i)(6 downto 0)));
+                            seen_ra <= to_integer(unsigned(sel_e(cb)(i))) mod N_ENT;
                             cst     <= C_RD;
                         end if;
                     end if;
@@ -633,7 +728,7 @@ begin
                     rw := c_row;
                     jm := c_j;
                     j  := lowest(jm);
-                    e2 := to_integer(unsigned(sel_e(cb)(j)(6 downto 0)));
+                    e2 := to_integer(unsigned(sel_e(cb)(j))) mod N_ENT;
                     if rw(e2) = '0' then
                         rw(e2) := '1';
                         if pcount >= 127 then
@@ -648,9 +743,9 @@ begin
                     jm(j) := '0';
                     c_row <= rw;
                     c_j   <= jm;
-                    if jm = x"00000000" then
+                    if unsigned(jm) = 0 then
                         seen_we <= '1';
-                        seen_wa <= to_integer(unsigned(c_e1(6 downto 0)));
+                        seen_wa <= to_integer(unsigned(c_e1)) mod N_ENT;
                         seen_wd <= rw;
                         cst     <= C_LOW;
                     end if;
@@ -756,7 +851,7 @@ begin
                     end if;
                 when W_CLEAR =>
                     -- forget the pairs seen this frame
-                    if clr_i < 128 then
+                    if clr_i < N_ENT then
                         seen_wa <= clr_i;
                         seen_wd <= (others => '0');
                         seen_we <= '1';

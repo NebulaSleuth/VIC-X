@@ -20,7 +20,9 @@ entity tb_vicx_step4 is
     generic (
         EXT  : boolean := false;    -- VRAM through the vx_* port
         REU  : boolean := false;    -- REU DMA holds the DMA0 slot (EXT only)
-        WX   : natural := 120       -- first window pixel in the line
+        WX   : natural := 120;      -- first window pixel in the line
+        NENT : natural := 128;      -- sprite table entries (CAP_SPR): 128 or 64
+        NLINE : natural := 32       -- sprites a line (CAP_SPRLINE): 32 or 16
     );
 end entity;
 
@@ -158,7 +160,7 @@ begin
     end generate;
 
     dut : entity work.vicx
-        generic map (VRAM_BITS => 17, CAP_SPR => 128, CAP_SPRLINE => 32, CAP_FEAT => x"07",
+        generic map (VRAM_BITS => 17, CAP_SPR => NENT, CAP_SPRLINE => NLINE, CAP_FEAT => x"07",
                      EXT_VRAM => EXT)
         port map (
             clk => clk, reset => reset,
@@ -301,7 +303,7 @@ begin
             sbehind := (others => 0);
             occ := (others => (others => '0'));
             nsel := 0; pix_n := 0;
-            for en in 0 to 127 loop
+            for en in 0 to NENT - 1 loop     -- higher entries are ignored
                 if not stop then
                     base := en * 8;
                     if (tbl(base + 3) / 4) mod 2 = 1 then
@@ -311,7 +313,7 @@ begin
                             ww := 8 * 2 ** ((tbl(base + 1) / 4) mod 4);
                             dwv := (tbl(base + 6) / 32) mod 2 = 1;
                             if dwv then sw := 2 * ww; else sw := ww; end if;
-                            if nsel >= 32 or pix_n + sw > 640 then
+                            if nsel >= NLINE or pix_n + sw > 640 then
                                 if cstat mod 2 = 0 then cstat := cstat + 1; end if;   -- overflow
                                 stop := true;
                             else

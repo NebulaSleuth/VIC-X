@@ -17,6 +17,8 @@ checked in GHDL against the same behaviour as the VICE fork.
 | `tb/tb_vicx_dma.vhd` | DMA engine testbench: each transfer also run on a reference that follows VICE's `dma_run`, memories compared; also the XRAM window decode |
 | `run_sim.sh` | analyse, elaborate and run every testbench in `tb/`; steps 1 and 2 also with external VRAM |
 | `sdram-vram-plan.md` | VRAM in the MiSTer's SDRAM: design, bandwidth, status |
+| `synth_xc7.sh` | Artix-7 (xc7) resource count for each block with GHDL + Yosys (see "On Artix-7" below) |
+| `vivado_xc7.tcl` | the same in Vivado, placed and routed, with timing |
 
     C:\msys64\usr\bin\bash.exe -lc "cd /d/Repos/VIC-X && sh hdl/run_sim.sh"
 
@@ -38,6 +40,82 @@ to 16 and up to 40 clocks. Deliberately breaking the write snoop or the
 stale-fetch discard makes it fail, and so does a memory that takes up to
 200 clocks (reads find no data ready: `vx_miss`).
 
+## On Artix-7
+
+Not yet built in Vivado (`vivado_xc7.tcl` is ready: out of context, placed
+and routed, utilisation per block and timing at a given clock).
+`synth_xc7.sh` gives a resource count from Yosys (`synth_xilinx -family
+xc7 -abc9`, Yosys 0.66, GHDL 6) for each block, with VRAM outside
+(`EXT_VRAM`) as on the MiSTer. The XC7A50T in the Commodore 64 Ultimate has
+32,600 LUTs, 65,200 flip-flops, 75 RAMB36 and 120 DSP48; the XC7A100T in the
+Commodore 77 has 63,400, 126,800, 135 and 240.
+
+Each feature's cost, measured 2026-11-19 (LUTs count LUT RAM too; the
+DMA, XRAM and blitter rows are differences between builds with and
+without them, the rest are the blocks' own counts):
+
+| Part | LUTs | Flip-flops | Block RAM | DSP | Build option |
+|------|------|------------|-----------|-----|--------------|
+| Core: unlock, registers, register space, palette, the two CPU ports, VRAM port and write queue, colour remap, compositing | 2,813 | 1,148 | 1 RAMB36 | 0 | always |
+| Layer, each of two (tile and bitmap) | 1,882 | 655 | 0 | 3 | CAP_FEAT bits 0, 1 |
+| Sprite engine, 128 entries, 32 a line | 4,254 | 2,920 | 5 RAMB36 + 1 RAMB18 | 0 | CAP_FEAT bit 2 |
+| Sprite engine, 64 entries, 16 a line | 2,453 | 1,793 | 3 RAMB18 | 0 | CAP_SPR, CAP_SPRLINE |
+| DMA engine and XRAM windows | 1,316 | 758 | 0 | 2 | CAP_FEAT bits 3, 4 |
+| Blitter operations (all five) | 521 | 193 | 0 | 2 | CAP_BLIT |
+
+| Build | LUTs | of an XC7A50T | of an XC7A100T |
+|-------|------|---------------|----------------|
+| Everything (the MiSTer build) | 12,668 | 39% | 20% |
+| Everything, sprites 64/16 | 10,936 | 34% | 17% |
+| Layers and sprites 64/16, no DMA | 9,323 | 29% | 15% |
+| Layers only | 6,499 | 20% | 10% |
+
+The same full build measured 22,229 LUTs before this work (Yosys, same
+flow); in Quartus (Cyclone V, the block alone) it went from 16,047 ALUTs
+and 8,721 registers to 11,378 and 7,795. What changed, each checked with
+`run_sim.sh`:
+
+- DMA descriptors are read from the register space as each starts (28
+  bytes, about 30 clocks), not kept in five copies in flip-flops; the
+  next-descriptor byte is read when a descriptor ends.
+- One register-space snoop for the CPU's, the DMA's and the sprites' stores
+  (they take turns), not three.
+- The VRAM write queue, the sprites' selection list and row buffers, and
+  palette entries 0-15 are in LUT RAM. The palette's first-access copy of
+  the stock palette takes 16 clocks instead of one; until an entry is
+  copied it reads as stock (unless stored since), so it reads the same.
+- The DMA's per-pixel `x * X step` is an accumulator, and a row's start is
+  worked out over three clocks instead of two chained multiplies in one
+  (for timing; about 150 ALUTs more, 2 DSPs fewer).
+- The sprite row offset is a shift (the row length is a power of two).
+
+Tried and taken back: shifts for the layers' map-width multiply, and a
+narrower row gather in the layer, both cost LUTs (267 and 229 a layer)
+where the DSP multiply and the original gather did not.
+
+How far to trust the counts: the layer and sprite blocks come out within
+about 100 LUTs from run to run; the top block (`vicx`) swung by a thousand
+LUTs between nearly equal designs before this work, and still varies by
+a few hundred. The blitter's operations are small (tens of LUTs each);
+switching them off one at a time gives differences within that noise.
+There is no timing figure: Yosys does not place or route.
+
+The sprite engine's size is a build option (CAP_SPR 128 or 64 entries,
+CAP_SPRLINE 32 or 16 a line; the capability registers report it). Almost
+all of the difference is sprites a line (the selection lists, the collision
+masks and the line buffers' mask bits are that wide); the table size is
+mostly block RAM. With 64 entries the table's higher entries are ignored
+(they are still stored in the register space). `run_sim.sh` runs the
+sprite testbench at 64/16 too.
+
+The register space, the palette (`pal_r/g/b`) and each layer's line
+buffer (`pbuf`) are written in the template GHDL's synthesis needs to infer
+RAM (one write enable, an unconditional read). Written otherwise (writes
+split by a case, two write enables with different data, a read replaced by
+a constant past the end) GHDL builds them from about 35,000 flip-flops and
+their read muxes, where Quartus still infers RAM; Quartus's result is the
+same either way (checked 2026-11-19: the same 15 RAMs, 128,384 bits).
+
 ## Steps
 
 1. Done: unlock, ID and capability registers, the two ports and VRAM, the
@@ -49,7 +127,8 @@ stale-fetch discard makes it fail, and so does a memory that takes up to
    layer fetches its line from the line's own start, when its setup is
    latched (as the spec says), into a decoded line buffer the display reads
    behind the fetch; the window's left edge comes about 16 C64 cycles later.
-4. Done: the sprite engine (CAP_FEAT bit 2, 128 entries, 32 a line). The
+4. Done: the sprite engine (CAP_FEAT bit 2, 128 entries, 32 a line, or as
+   set by CAP_SPR and CAP_SPRLINE: 64 and 16 are also built and tested). The
    next line is prepared during the current one.
 5. Done for the MiSTer (CAP_FEAT bits 3 and 4): the DMA engine reaches C64
    RAM, VRAM and XRAM through the SDRAM port, and holds the CPU through RDY

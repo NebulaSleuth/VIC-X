@@ -103,6 +103,7 @@ architecture rtl of vicx_layer is
 
     -- line buffer
     signal pbuf      : pbuf_t := (others => (others => '0'));
+    signal pb_wdx    : std_logic_vector(63 downto 0);  -- the word written
     signal pb_we     : std_logic := '0';
     signal pb_wa     : unsigned(5 downto 0) := (others => '0');
     signal pb_wd     : std_logic_vector(63 downto 0) := (others => '0');
@@ -134,14 +135,16 @@ begin
     f_addr <= addr_r;
     f_busy <= '0' when st = S_IDLE or st = S_DONE else '1';
 
-    -- line buffer: one write port (two words over two clocks), one read port
+    -- line buffer: one write port (two words over two clocks), one read
+    -- port. The word is chosen before the write so that there is a single
+    -- write enable, which GHDL's synthesis needs to infer RAM.
+    pb_wdx <= pb_wd when pb_we = '1' else pb_wd2;
+
     pb_mem : process (clk)
     begin
         if rising_edge(clk) then
-            if pb_we = '1' then
-                pbuf(to_integer(pb_wa)) <= pb_wd;
-            elsif pb_we2 = '1' then
-                pbuf(to_integer(pb_wa)) <= pb_wd2;
+            if pb_we = '1' or pb_we2 = '1' then
+                pbuf(to_integer(pb_wa)) <= pb_wdx;
             end if;
             pb_q <= pbuf(to_integer(pb_ra));
         end if;

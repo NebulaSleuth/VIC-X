@@ -574,7 +574,17 @@ begin
             elsif not c64 and halted then
                 fail(what & ": CPU held during a background transfer");
             end if;
-            idle(100);                                  -- queued writes go out
+            -- queued writes go out: the DMA is done when its last words are
+            -- in the port write queue, which can take hundreds of clocks
+            -- to drain behind layer reads (software cannot see this: port
+            -- reads go after queued writes). Wait for 400 clocks without a
+            -- write request.
+            w := 0;
+            for i in 1 to 20000 loop
+                wait until rising_edge(clk);
+                if vx_req = '1' and vx_we = '1' then w := 0; else w := w + 1; end if;
+                exit when w = 400;
+            end loop;
             rd(16#D04A#, irq_was);
             if irq_want and irq_was(1) = '0' then
                 fail(what & ": no DMA IRQ");

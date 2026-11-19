@@ -33,5 +33,7 @@ run tb_vicx_step2 -gEXT=true -gREU=true
 run tb_vicx_step2 -gEXT=true -gDMA=true -gWX=40
 run tb_vicx_step3 -gEXT=true
 run tb_vicx_step4 -gEXT=true
+run tb_vicx_step4 -gNENT=64 -gNLINE=16
+run tb_vicx_step4 -gEXT=true -gNENT=64 -gNLINE=16
 run tb_vicx_wide -gEXT=true
 exit $status
