@@ -8,7 +8,8 @@
 # summary.txt). PART e.g. xc7a50tfgg484-1 or xc7a100tfgg484-1. Generics not
 # given keep the MiSTer build's values (VRAM_BITS 17, EXT_VRAM true,
 # CAP_SPR 128, CAP_SPRLINE 32, CAP_FEAT 1F, CAP_BLIT 1F); vectors in hex,
-# e.g. CAP_FEAT=07.
+# e.g. CAP_FEAT=07. On Windows write CAP_FEAT:07 instead: vivado.bat splits
+# its arguments at '='.
 #
 # Out of context the block has no pins: its inputs are taken to come from
 # registers in the core around it (2 ns allowed for the wire), and its
@@ -24,7 +25,12 @@ file mkdir $out
 
 array set g {VRAM_BITS 17 EXT_VRAM true CAP_SPR 128 CAP_SPRLINE 32 CAP_FEAT 1F CAP_BLIT 1F}
 foreach a [lrange $argv 3 end] {
-    set kv [split $a =]
+    # NAME=VALUE, or NAME:VALUE when run through vivado.bat, which splits
+    # its arguments at '='
+    set kv [split $a =:]
+    if {[llength $kv] != 2 || ![info exists g([lindex $kv 0])] || [lindex $kv 1] eq ""} {
+        error "bad generic '$a' (want NAME=VALUE or NAME:VALUE, NAME one of [lsort [array names g]])"
+    }
     set g([lindex $kv 0]) [lindex $kv 1]
 }
 set gl {}
@@ -54,6 +60,10 @@ report_utilization -file [file join $out util.txt]
 report_utilization -hierarchical -hierarchical_depth 3 -file [file join $out util_hier.txt]
 report_timing_summary -max_paths 10 -file [file join $out timing.txt]
 report_timing -max_paths 20 -nworst 1 -unique_pins -file [file join $out paths.txt]
+# the block's own paths, register to register, apart from those through its ports
+report_timing -from [all_registers] -to [all_registers] -max_paths 30 -nworst 1 \
+    -unique_pins -file [file join $out paths_reg.txt]
+write_checkpoint -force [file join $out routed.dcp]
 
 set wns [get_property SLACK [get_timing_paths -max_paths 1 -nworst 1 -setup]]
 set fmax [expr {1000.0 / ($period - $wns)}]

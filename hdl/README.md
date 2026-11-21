@@ -19,6 +19,7 @@ checked in GHDL against the same behaviour as the VICE fork.
 | `sdram-vram-plan.md` | VRAM in the MiSTer's SDRAM: design, bandwidth, status |
 | `synth_xc7.sh` | Artix-7 (xc7) resource count for each block with GHDL + Yosys (see "On Artix-7" below) |
 | `vivado_xc7.tcl` | the same in Vivado, placed and routed, with timing |
+| `vivado_xc7.sh` | the usual Vivado builds, on both Artix-7 parts at 77 MHz |
 
     C:\msys64\usr\bin\bash.exe -lc "cd /d/Repos/VIC-X && sh hdl/run_sim.sh"
 
@@ -42,33 +43,63 @@ stale-fetch discard makes it fail, and so does a memory that takes up to
 
 ## On Artix-7
 
-Not yet built in Vivado (`vivado_xc7.tcl` is ready: out of context, placed
-and routed, utilisation per block and timing at a given clock).
-`synth_xc7.sh` gives a resource count from Yosys (`synth_xilinx -family
-xc7 -abc9`, Yosys 0.66, GHDL 6) for each block, with VRAM outside
-(`EXT_VRAM`) as on the MiSTer. The XC7A50T in the Commodore 64 Ultimate has
-32,600 LUTs, 65,200 flip-flops, 75 RAMB36 and 120 DSP48; the XC7A100T in the
-Commodore 77 has 63,400, 126,800, 135 and 240.
+Built in Vivado 2026.2 (`sh hdl/vivado_xc7.sh`, which runs
+`vivado_xc7.tcl`): the block alone, out of context, placed and routed at
+77 MHz on speed grade -1, with VRAM outside (`EXT_VRAM`) as on the MiSTer.
+Its ports are taken to come from and go to registers in the core around
+it, with 2 ns of each clock for the wire. The XC7A50T in the Commodore 64
+Ultimate has 32,600 LUTs, 65,200 flip-flops, 75 block RAM tiles and 120
+DSP48; the XC7A100T in the Commodore 77 has 63,400, 126,800, 135 and 240.
 
-Each feature's cost, measured 2026-11-19 (LUTs count LUT RAM too; the
-DMA, XRAM and blitter rows are differences between builds with and
-without them, the rest are the blocks' own counts):
+Measured 2026-11-20 (LUTs count LUT RAM too; block RAM in 36 Kb tiles):
+
+| Build | LUTs (of which RAM) | Flip-flops | Block RAM | DSP | XC7A50T | XC7A100T | Slack at 77 MHz |
+|-------|---------------------|------------|-----------|-----|---------|----------|-----------------|
+| Everything (the MiSTer build) | 9,550 (188) | 5,872 | 15 | 10 | 29% | 15% | +0.05 ns (50T), +0.19 ns (100T) |
+| Everything, sprites 64/16 | 8,531 (276) | 4,675 | 9 | 10 | 26% | 13% | +0.03 ns |
+| Layers and sprites 64/16, no DMA | 6,801 (250) | 3,798 | 8.5 | 6 | 21% | 11% | +0.52 ns |
+| Layers only | 5,311 (84) | 2,212 | 4.5 | 6 | 16% | 8% | +0.71 ns |
+
+Each part's cost, from the differences between those builds:
 
 | Part | LUTs | Flip-flops | Block RAM | DSP | Build option |
 |------|------|------------|-----------|-----|--------------|
-| Core: unlock, registers, register space, palette, the two CPU ports, VRAM port and write queue, colour remap, compositing | 2,813 | 1,148 | 1 RAMB36 | 0 | always |
-| Layer, each of two (tile and bitmap) | 1,882 | 655 | 0 | 3 | CAP_FEAT bits 0, 1 |
-| Sprite engine, 128 entries, 32 a line | 4,254 | 2,920 | 5 RAMB36 + 1 RAMB18 | 0 | CAP_FEAT bit 2 |
-| Sprite engine, 64 entries, 16 a line | 2,453 | 1,793 | 3 RAMB18 | 0 | CAP_SPR, CAP_SPRLINE |
-| DMA engine and XRAM windows | 1,316 | 758 | 0 | 2 | CAP_FEAT bits 3, 4 |
-| Blitter operations (all five) | 521 | 193 | 0 | 2 | CAP_BLIT |
+| Core: unlock, registers, register space, palette, the two CPU ports, VRAM port and write queue, colour remap, compositing | about 1,600 | 1,060 | 2.5 | 0 | always |
+| Layer, each of two (tile and bitmap) | about 1,830 | 574 | 1 | 3 | CAP_FEAT bits 0, 1 |
+| Sprite engine, 64 entries, 16 a line | 1,490 | 1,586 | 4 | 0 | CAP_FEAT bit 2, CAP_SPR, CAP_SPRLINE |
+| Sprite engine, 128 entries, 32 a line: more than 64/16 | 1,019 | 1,197 | 6 | 0 | |
+| DMA engine, XRAM windows and the blitter's operations | 1,730 | 877 | 0.5 | 4 | CAP_FEAT bits 3, 4, CAP_BLIT |
 
-| Build | LUTs | of an XC7A50T | of an XC7A100T |
-|-------|------|---------------|----------------|
-| Everything (the MiSTer build) | 12,668 | 39% | 20% |
-| Everything, sprites 64/16 | 10,936 | 34% | 17% |
-| Layers and sprites 64/16, no DMA | 9,323 | 29% | 15% |
-| Layers only | 6,499 | 20% | 10% |
+Vivado's own per-block report (`util_hier.txt`) moves logic across block
+edges as it optimises, by several hundred LUTs between builds of the same
+block, so the table takes whole-build differences instead. The full build
+on the 50T meets 77 MHz with little to spare; inside a whole C64 Ultimate
+design, placed among the rest, it may need another stage or two (the
+worst paths left are the sprite engine's draw step and the DMA's store,
+`paths_reg.txt` lists them).
+
+For 77 MHz (the first route came out at 57 MHz, with the CPU's and the
+DMA's work for a clock chained into one 23-LUT path):
+
+- The register copies (layer setups, order, wide window, DMA list
+  address) follow a register-space store a clock later, so the store and
+  the decoder behind them are no longer one path.
+- Where the DMA's source and destination go (C64 RAM, VRAM, the register
+  space, the palette, XRAM) is worked out when it moves to them, a clock
+  before the byte step uses it.
+- A DMA read from the palette waits out a clock in which the CPU accesses
+  VIC-X (rather than taking the CPU's store as it happens), and the byte
+  is used a clock after it is read.
+- The frontmost layer or sprite pixel goes into a register before the
+  palette RAM. A pixel lasts four clocks or more (four on the MiSTer, about
+  ten at 77 MHz), so this costs no delay; `pix_ce` must now come no more
+  often than every fourth clock.
+
+`synth_xc7.sh` gives Yosys's count for each block (`synth_xilinx -family
+xc7 -abc9`, Yosys 0.66, GHDL 6), with no placement or timing. Before the
+timing work it counted 12,668 LUTs for everything, 10,936 with sprites
+64/16, 9,323 with no DMA and 6,499 for the layers alone; Yosys maps less
+tightly than Vivado, by about a quarter here.
 
 The same full build measured 22,229 LUTs before this work (Yosys, same
 flow); in Quartus (Cyclone V, the block alone) it went from 16,047 ALUTs
@@ -93,12 +124,8 @@ Tried and taken back: shifts for the layers' map-width multiply, and a
 narrower row gather in the layer, both cost LUTs (267 and 229 a layer)
 where the DSP multiply and the original gather did not.
 
-How far to trust the counts: the layer and sprite blocks come out within
-about 100 LUTs from run to run; the top block (`vicx`) swung by a thousand
-LUTs between nearly equal designs before this work, and still varies by
-a few hundred. The blitter's operations are small (tens of LUTs each);
-switching them off one at a time gives differences within that noise.
-There is no timing figure: Yosys does not place or route.
+The blitter's operations are small (tens of LUTs each); switching them
+off one at a time gives differences within the run-to-run noise.
 
 The sprite engine's size is a build option (CAP_SPR 128 or 64 entries,
 CAP_SPRLINE 32 or 16 a line; the capability registers report it). Almost

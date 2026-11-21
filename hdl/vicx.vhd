@@ -28,7 +28,8 @@
 --   the start of each raster line; raster_y is the line number, valid with
 --   line_start.  Each clock the block takes the VIC-II's colour index and the
 --   core's RGB for it, and returns the RGB to show one clock later.
---   pix_ce marks the first clock of each pixel; with it come vic_bg (the
+--   pix_ce marks the first clock of each pixel, four clocks apart or more
+--   (the layers' and sprites' pixel takes four to work out); with it come vic_bg (the
 --   VIC-II drew this pixel from $D021: background, not foreground, sprite or
 --   border) and vic_win (the pixel is in the 320x200 display window, lines
 --   51-250, the area the border opens on with 40 columns and 25 rows).
@@ -357,7 +358,7 @@ architecture rtl of vicx is
                   DM_PUT, DM_FLUSH, DM_WWAIT, DM_NEXT,
                   DM_TLOAD, DM_TWAIT, DM_LUT1, DM_LUT2, DM_SEEK,
                   DM_LFETCH, DM_LWAIT, DM_DLOAD, DM_NRD, DM_NR1, DM_NR2,
-                  DM_SEEK2, DM_SEEK3);
+                  DM_SEEK2, DM_SEEK3, DM_PR1);
     signal dm_st      : dmst_t := DM_IDLE;
     signal dm_ret     : dmst_t := DM_IDLE;          -- where a flush goes back to
     signal dm_busy    : std_logic := '0';
@@ -384,6 +385,14 @@ architecture rtl of vicx is
     signal dm_x       : unsigned(15 downto 0) := (others => '0');  -- source pixel in the row
     -- dm_x * X step (scaled copy), kept as x moves a pixel at a time
     signal dm_xacc    : unsigned(31 downto 0) := (others => '0');
+    -- where dm_s and dm_t go (see dm_map), worked out with them in dm_pos
+    signal dm_sk, dm_dk : natural range 0 to 3 := 0;
+    signal dm_pv      : std_logic_vector(7 downto 0) := (others => '0');  -- a palette byte read
+    signal dm_sa, dm_da : unsigned(24 downto 0) := (others => '0');
+    -- a register-space store, for the register copies a clock later
+    signal snq_v      : std_logic := '0';
+    signal snq_a      : unsigned(11 downto 0) := (others => '0');
+    signal snq_d      : std_logic_vector(7 downto 0) := (others => '0');
     -- a row's start over three clocks (DM_SEEK, 2, 3): the row, row * Y
     -- step, the destination and source offsets, last pixel * X step
     signal dm_ra      : unsigned(15 downto 0) := (others => '0');
@@ -513,6 +522,10 @@ architecture rtl of vicx is
     -- display: the frontmost opaque layer for each pixel, then its colour
     signal vx_x       : unsigned(8 downto 0) := (others => '0');   -- window pixel
     signal w_idx      : std_logic_vector(7 downto 0);
+    -- the winner a clock later, for the palette RAM's address (a pixel
+    -- lasts four clocks or more, so there is a clock to spare)
+    signal w_idx_r    : std_logic_vector(7 downto 0) := (others => '0');
+    signal w_ok_r, w_vf_r, w_late_r : std_logic := '0';
     signal w_ok       : std_logic;
     signal w_vf       : std_logic;                 -- the VIC-II is in front of it
     signal b_idx      : std_logic_vector(7 downto 0) := (others => '0');
@@ -845,7 +858,7 @@ begin
         end if;
     end process;
 
-    pal_ra <= unsigned(w_idx);
+    pal_ra <= unsigned(w_idx_r);
 
     -- the register space: one write with its data chosen first, and a read
     -- that always happens (at address 0 when past the space, then replaced
@@ -1063,26 +1076,6 @@ begin
             end case;
         end procedure;
 
-        -- source pixel x of the rows starting at sr and tr: dm_s, dm_t
-        -- (expand: a source byte per 8 pixels; mirror: x goes to w - 1 - x)
-        procedure dm_pos(sr, tr : unsigned(23 downto 0); x : unsigned(15 downto 0);
-                         xp : unsigned(31 downto 0)) is   -- xp: x * X step
-            variable so, dof : unsigned(15 downto 0);
-        begin
-            if dm_ex = '1' then
-                so := shift_right(x, 3);
-            elsif HAS_SCALED and dm_sc = '1' then
-                so := xp(23 downto 8);              -- scaled: (x * X step) >> 8
-            else
-                so := x;
-            end if;
-            if dm_mir = '1' then dof := dm_w - 1 - x; else dof := x; end if;
-            dm_s <= sr + resize(so, 24);
-            dm_t <= tr + resize(dof, 24);
-            dm_x <= x;
-            dm_xacc <= xp;
-        end procedure;
-
         -- where a DMA address in a space goes: kind and SDRAM address
         procedure dm_map(sp : std_logic_vector(1 downto 0); da : unsigned(23 downto 0);
                          kind : out natural; sa : out unsigned(24 downto 0)) is
@@ -1112,6 +1105,40 @@ begin
                 when others => null;
             end case;
         end procedure;
+
+        -- source pixel x of the rows starting at sr and tr: dm_s, dm_t
+        -- (expand: a source byte per 8 pixels; mirror: x goes to w - 1 - x)
+        -- and where they go, dm_sk / dm_sa and dm_dk / dm_da (the byte
+        -- step takes them ready-made)
+        procedure dm_pos(sr, tr : unsigned(23 downto 0); x : unsigned(15 downto 0);
+                         xp : unsigned(31 downto 0)) is   -- xp: x * X step
+            variable so, dof : unsigned(15 downto 0);
+            variable sn, tn  : unsigned(23 downto 0);
+            variable k       : natural range 0 to 3;
+            variable sa      : unsigned(24 downto 0);
+        begin
+            if dm_ex = '1' then
+                so := shift_right(x, 3);
+            elsif HAS_SCALED and dm_sc = '1' then
+                so := xp(23 downto 8);              -- scaled: (x * X step) >> 8
+            else
+                so := x;
+            end if;
+            if dm_mir = '1' then dof := dm_w - 1 - x; else dof := x; end if;
+            sn := sr + resize(so, 24);
+            tn := tr + resize(dof, 24);
+            dm_s <= sn;
+            dm_t <= tn;
+            dm_map(dm_ss, sn, k, sa);
+            dm_sk <= k;
+            dm_sa <= sa;
+            dm_map(dm_ds, tn, k, sa);
+            dm_dk <= k;
+            dm_da <= sa;
+            dm_x <= x;
+            dm_xacc <= xp;
+        end procedure;
+
     begin
         if rising_edge(clk) then
             vram_we <= '0';
@@ -1602,8 +1629,8 @@ begin
                                 dm_st   <= DM_SEEK;         -- the next row's start
                             end if;
                         else
-                            dm_map(dm_ds, dm_t, dkind, sdst);
-                            dm_map(dm_ss, dm_s, skind, ssrc);
+                            dkind := dm_dk; sdst := dm_da;
+                            skind := dm_sk; ssrc := dm_sa;
                             if dm_wbe /= "00" and
                                (dkind /= 1 or dm_wa(24 downto 1) /= sdst(24 downto 1)) then
                                 -- the buffered word first
@@ -1632,21 +1659,20 @@ begin
                                     when 2 =>
                                         dm_st <= DM_RRD;
                                     when 3 =>
-                                        if pend_v = '1' or pal_pend = '1' then
-                                            -- not copied yet (or the copy starts this
-                                            -- clock): the stock byte, or the CPU's
-                                            if pw_v and pw_a = dm_s(5 downto 0) then
-                                                dval := pw_d;
-                                            else
-                                                dval := stock_byte(stock_rgb, to_integer(dm_s(5 downto 0)));
-                                            end if;
-                                        elsif pw_v and pw_a = dm_s(5 downto 0) then
-                                            dval := pw_d;           -- the CPU's store this clock
+                                        -- not in a clock the CPU accesses VIC-X (it
+                                        -- may store to the palette, or start the
+                                        -- copy): the byte a clock later instead
+                                        -- read here, used next clock (DM_PR1)
+                                        if vic_cs = '1' and (cpu_wr = '1' or cpu_rd = '1') then
+                                            null;
                                         else
-                                            dval := pl_dma;
+                                            if pal_pend = '1' then
+                                                dm_pv <= stock_byte(stock_rgb, to_integer(dm_s(5 downto 0)));
+                                            else
+                                                dm_pv <= pl_dma;
+                                            end if;
+                                            dm_st <= DM_PR1;
                                         end if;
-                                        dput  := true;
-                                        dsrcv := true;
                                     when others =>
                                         dval  := x"FF";     -- unmapped, or no XRAM
                                         dput  := true;
@@ -1668,15 +1694,20 @@ begin
                             mem_raddr <= "10" & dm_s(15 downto 0);
                             dm_st <= DM_RR1;
                         end if;
+                    when DM_PR1 =>
+                        dkind := dm_dk; sdst := dm_da;
+                        dval  := dm_pv;
+                        dput  := true;
+                        dsrcv := true;
                     when DM_RR1 =>
                         dm_st <= DM_RR2;
                     when DM_RR2 =>
-                        dm_map(dm_ds, dm_t, dkind, sdst);
+                        dkind := dm_dk; sdst := dm_da;
                         dval  := regs_q;
                         dput  := true;
                         dsrcv := true;
                     when DM_PUT =>
-                        dm_map(dm_ds, dm_t, dkind, sdst);
+                        dkind := dm_dk; sdst := dm_da;
                         dval := dm_val;
                         dput := true;
 
@@ -1710,7 +1741,7 @@ begin
                     when DM_LUT1 =>
                         dm_st <= DM_LUT2;
                     when DM_LUT2 =>
-                        dm_map(dm_ds, dm_t, dkind, sdst);
+                        dkind := dm_dk; sdst := dm_da;
                         dval := lut_q;
                         dput := true;
 
@@ -1986,8 +2017,15 @@ begin
             -- what the display and the DMA keep from the register space:
             -- one store a clock at most (the CPU's, the DMA's or the
             -- sprites', which take turns), so one decoder serves all three
+            -- (a clock after the store: keeps the decoder off the stores' paths)
+            if snq_v = '1' then
+                regs_snoop(snq_a, snq_d);
+            end if;
+            snq_v <= '0';
             if sn_v then
-                regs_snoop(sn_a, sn_d);
+                snq_v <= '1';
+                snq_a <= sn_a;
+                snq_d <= sn_d;
             end if;
 
             -- external VRAM engine: start the next request.  Queued writes
@@ -2125,6 +2163,7 @@ begin
                 pal_pend  <= '1';
                 pl_cp     <= '0';
                 sweeping  <= '1';
+                snq_v     <= '0';
                 sweep_ptr <= to_unsigned(PAL_LO_SZ, 12);
                 vram_we   <= '0';
                 regs_we   <= '0';
@@ -2182,11 +2221,16 @@ begin
         variable lc      : std_logic_vector(4 downto 0);
     begin
         if rising_edge(clk) then
-            -- B: the frontmost layer pixel for vx_x (pal_q comes with it)
-            b_idx  <= w_idx;
-            b_ok   <= w_ok;
-            b_vf   <= w_vf;
-            b_late <= q_late(0) or q_late(1);
+            -- A: the frontmost layer pixel for vx_x; B: the same a clock
+            -- later, with its palette entry (pal_q)
+            w_idx_r  <= w_idx;
+            w_ok_r   <= w_ok;
+            w_vf_r   <= w_vf;
+            w_late_r <= q_late(0) or q_late(1);
+            b_idx  <= w_idx_r;
+            b_ok   <= w_ok_r;
+            b_vf   <= w_vf_r;
+            b_late <= w_late_r;
 
             li := to_integer(unsigned(b_idx));
             if li >= 16 then
