@@ -6,8 +6,9 @@ palette, two tile/bitmap layers, a 128-sprite engine, 128 KB of VRAM, 16 MB
 of XRAM shared with the REU, and a DMA/blitter. A stock program sees no
 difference until it unlocks VIC-X.
 
-The spec lives in the Claude Docs document "VIC-X: Graphics and Memory
-Extension Spec". This repository holds everything that is not emulator code:
+The specification, with every register and worked examples in BASIC and
+assembly, is published at <https://extrastrength.com/vic-x-docs.html>.
+This repository holds everything that is not emulator code:
 
 | Path               | Contents |
 |--------------------|----------|
@@ -16,7 +17,7 @@ Extension Spec". This repository holds everything that is not emulator code:
 | `tests/`           | conformance test programs (ca65) and their runner |
 | `demos/`           | demos from the spec's demo plan (see `demos/README.md`) |
 | `tools/`           | developer tools: PNG converter, demo art generator |
-| `hdl/`             | the VHDL block (later) |
+| `hdl/`             | the VHDL block: portable VHDL for Quartus and Vivado (see `hdl/README.md`) |
 
 The reference model is a VICE fork,
 [vice-vicx](https://github.com/NebulaSleuth/vice-vicx/tree/vicx) (branch
@@ -218,3 +219,9 @@ byte-identical screenshots:
     python stock-compat.py --testprogs <dir> --stock <unmodified headless x64sc.exe>
 
 The list is in `stock-compat.txt`.
+
+## Licence
+
+VIC-X is free software, released under the GNU General Public License,
+version 2 or (at your option) any later version, the same terms as VICE and
+the MiSTer Commodore 64 core it is built into. See `LICENSE`.
