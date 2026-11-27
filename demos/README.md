@@ -141,8 +141,8 @@ In the GTK build of the VICE fork, from an MSYS2 UCRT64 shell (any folder):
 Replace both `parallax` with any other demo's name. This loads the data
 instantly from the REU image, without the disk. Add `-ntsc` for an NTSC
 C64 (about 60 Hz): on a 60 Hz monitor that scrolls more smoothly than PAL's
-50 Hz, which VICE has to show unevenly. NTSC frames are shorter, so the same
-work shows as a higher CPU percentage (bullets: about 49% PAL, 74% NTSC).
+50 Hz, which VICE has to show unevenly. The readout then shows 60
+when every frame is drawn, and 30 where a step takes two frames.
 
 - `-directory` points VICE at its ROMs and keymaps; a build run from its
   build tree does not find them otherwise ("Default keymap not found").

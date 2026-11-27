@@ -289,7 +289,7 @@ render_str:
         bne :-
 :       rts
 
-; Draw character A (PETSCII letters, digits, space, %) at bar column X.
+; Draw character A (PETSCII letters, digits, space) at bar column X.
 render_char:
         and #$3F
         sta glyph

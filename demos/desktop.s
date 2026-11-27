@@ -30,7 +30,7 @@
 ; checking the demo in headless VICE.
 
 NEED_XRAM_MB = 2
-CPU_TEXT     = $C800                ; unused: the menu bar shows the redraw rate instead (rate_show)
+CPU_TEXT     = $C800                ; unused: no cpu_end here, the menu bar shows the redraw rate (rate_show)
 LD_IN        = $3800                ; the loader's buffer, above this program
 .include "demo.inc"
 .include "assets.inc"
@@ -277,7 +277,6 @@ loop:
 :       jsr rate_show
         lda last_vf
         sta it_vf
-        jsr cpu_start
         inc frame
         jsr read_input
 .ifdef DESK_TEST
@@ -296,8 +295,7 @@ loop:
         beq :+
         lda it_vf
         sta paint_vf
-:       jsr cpu_end
-        jmp loop
+:       jmp loop
 
 ; Wait for raster lines 251-255 (below the display window), reading the
 ; input meanwhile.
