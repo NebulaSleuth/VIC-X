@@ -1,3 +1,6 @@
+; SPDX-License-Identifier: GPL-3.0-or-later
+; Copyright (C) 2026 Michael Hartman
+;
 ; t25_wide - the wide window at full size: layers and sprites fill the
 ; whole visible frame, (0,0) moves to its corner, and the border over the
 ; 320x200 area stays on top.

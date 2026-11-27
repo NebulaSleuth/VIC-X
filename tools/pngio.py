@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Michael Hartman
+
 """pngio - minimal PNG reading and writing with the standard library only.
 
 read(path) -> (width, height, rows), where rows[y][x] is an (r, g, b, a)

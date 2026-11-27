@@ -1,3 +1,6 @@
+-- SPDX-License-Identifier: GPL-3.0-or-later
+-- Copyright (C) 2026 Michael Hartman
+--
 -- VIC-X: graphics and memory extension for the C64 (spec 0.1, draft)
 --
 -- Steps 1 and 2 of the FPGA block: the unlock, the ID and capability

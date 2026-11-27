@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Michael Hartman
+
 """Run uci_probe.s on an Ultimate over the network and report what UCI did.
 
     python run_uci_probe.py <ultimate host> [--reu FILE] [--dir /Temp] [--png out.png]

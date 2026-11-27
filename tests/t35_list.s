@@ -1,3 +1,6 @@
+; SPDX-License-Identifier: GPL-3.0-or-later
+; Copyright (C) 2026 Michael Hartman
+;
 ; t35_list - the blitter's optional lists in VRAM (DMA_CMD bit 2, CAP_BLIT
 ; bit 4): 32-byte descriptors one after another from the VRAM address at
 ; $2085C-$2085E, each read when its turn comes, until one whose operation is

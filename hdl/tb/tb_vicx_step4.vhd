@@ -1,3 +1,6 @@
+-- SPDX-License-Identifier: GPL-3.0-or-later
+-- Copyright (C) 2026 Michael Hartman
+--
 -- Testbench for VIC-X step 4: the sprite engine.  Built on the step 3
 -- testbench (two layers, the order, border pixels in the window); the
 -- reference adds sprite_line and the sprite places in mix_line from the

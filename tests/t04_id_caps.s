@@ -1,3 +1,6 @@
+; SPDX-License-Identifier: GPL-3.0-or-later
+; Copyright (C) 2026 Michael Hartman
+;
 ; t04_id_caps - ID, VERSION, capability registers, CTRL, IRQ_EN, reserved
 ; registers and the frame counter.
 ;

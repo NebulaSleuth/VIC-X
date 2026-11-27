@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Michael Hartman
+
 """lzpack - a small LZ77 compressor whose blocks a 6502 can unpack quickly.
 
 Block format (an LZ4-style byte stream, each block on its own):

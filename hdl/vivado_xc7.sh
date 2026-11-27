@@ -1,4 +1,7 @@
 #!/bin/sh
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Michael Hartman
+#
 # vivado_xc7.sh - the usual Vivado builds of the VIC-X block (see
 # vivado_xc7.tcl): all of it on both Artix-7 parts, and the smaller builds
 # on the XC7A50T, all at 77 MHz. Results in hdl/build/vivado/NAME, a line

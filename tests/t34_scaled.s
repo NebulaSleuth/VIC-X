@@ -1,3 +1,6 @@
+; SPDX-License-Identifier: GPL-3.0-or-later
+; Copyright (C) 2026 Michael Hartman
+;
 ; t34_scaled - the blitter's optional scaled copy (operation 6, CAP_BLIT bit
 ; 2): destination byte c of row r takes source byte (c * X step) >> 8 of
 ; source row (r * Y step) >> 8 (steps 8.8 at descriptor +24-+27); bytes equal

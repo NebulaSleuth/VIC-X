@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Michael Hartman
+#
 # vivado_xc7.tcl - build the VIC-X block alone in Vivado: synthesis, place
 # and route out of context, then utilisation for each block and timing.
 #

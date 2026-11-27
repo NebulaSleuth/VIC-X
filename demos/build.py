@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Michael Hartman
+
 """Build the VIC-X demos.
 
   python build.py              art, conversion, REU images, PRGs

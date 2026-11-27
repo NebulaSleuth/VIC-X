@@ -1,3 +1,6 @@
+; SPDX-License-Identifier: GPL-3.0-or-later
+; Copyright (C) 2026 Michael Hartman
+;
 ; t21_sprites - the sprite engine draws: sizes, 4- and 8-bit pixels, palette
 ; bank, flips, double width, X/Y wrap at 1024, the on bit.
 ;

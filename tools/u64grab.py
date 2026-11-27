@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Michael Hartman
+
 """Grab one frame from an Ultimate 64's VIC video stream and save it as PNG.
 
     python u64grab.py <u64 host> out.png [--me <this machine's IP>] [--port 11000]

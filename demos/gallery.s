@@ -1,3 +1,6 @@
+; SPDX-License-Identifier: GPL-3.0-or-later
+; Copyright (C) 2026 Michael Hartman
+;
 ; gallery.s - Gallery: 256-colour pictures streamed from XRAM, double
 ; buffered, with palette fades.
 ;

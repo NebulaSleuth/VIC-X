@@ -1,3 +1,6 @@
+; SPDX-License-Identifier: GPL-3.0-or-later
+; Copyright (C) 2026 Michael Hartman
+;
 ; t12_front - the VIC-II stays in front of layer 0: its border, its sprites
 ; and every pixel not drawn in the $D021 colour.  The test uses 38-column
 ; mode, where the border covers window columns 0-6 and 311-319.  Changing $D021

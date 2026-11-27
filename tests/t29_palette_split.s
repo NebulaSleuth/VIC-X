@@ -1,3 +1,6 @@
+; SPDX-License-Identifier: GPL-3.0-or-later
+; Copyright (C) 2026 Michael Hartman
+;
 ; t29_palette_split - palette writes show at once, mid-frame.
 ;
 ; Background = colour 6, remapped (CTRL bit 3) to palette entry 6.  Each

@@ -1,3 +1,6 @@
+; SPDX-License-Identifier: GPL-3.0-or-later
+; Copyright (C) 2026 Michael Hartman
+;
 ; bullets.s - Bullet storm: 128 sprites, collision groups, DMA table updates.
 ;
 ; A build with fewer sprite table entries (CAP_SPR below 128) gets as many

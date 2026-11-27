@@ -1,3 +1,6 @@
+; SPDX-License-Identifier: GPL-3.0-or-later
+; Copyright (C) 2026 Michael Hartman
+;
 ; wide.s - Wide screen: the parallax world filling the whole visible frame.
 ;
 ; The same two scrolling layers as parallax.s, drawn 272 rows tall, and the

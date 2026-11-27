@@ -1,3 +1,6 @@
+; SPDX-License-Identifier: GPL-3.0-or-later
+; Copyright (C) 2026 Michael Hartman
+;
 ; desktop.s - Desktop: a GEOS-style windowing desktop.
 ;
 ; Layer 0 is a 320x200 8-bit bitmap, double buffered ($00000 and $10000):

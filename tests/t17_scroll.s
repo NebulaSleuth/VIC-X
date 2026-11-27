@@ -1,3 +1,6 @@
+; SPDX-License-Identifier: GPL-3.0-or-later
+; Copyright (C) 2026 Michael Hartman
+;
 ; t17_scroll - tile layer scrolling: scroll X/Y wrap around the map in
 ; both directions.  Bits 12-15 are set and have no effect (the widest map
 ; is 4096 pixels, so they could never be seen).

@@ -1,3 +1,6 @@
+; SPDX-License-Identifier: GPL-3.0-or-later
+; Copyright (C) 2026 Michael Hartman
+;
 ; t01_locked - while locked (or with VIC-X disabled), $D040-$D06F behave as
 ; stock VIC-II mirrors of $D000-$D02F, and broken unlock sequences do not
 ; unlock.

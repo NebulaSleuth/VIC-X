@@ -1,3 +1,6 @@
+; SPDX-License-Identifier: GPL-3.0-or-later
+; Copyright (C) 2026 Michael Hartman
+;
 ; t30_layer_low_colours - layer pixels in colours 1-15 use the VIC-X palette.
 ;
 ; Palette entry 5 := FF8000 (orange), remapping (CTRL bit 3) off.  Layer 0 is

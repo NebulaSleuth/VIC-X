@@ -1,3 +1,6 @@
+-- SPDX-License-Identifier: GPL-3.0-or-later
+-- Copyright (C) 2026 Michael Hartman
+--
 -- VIC-X layer: one tile or bitmap layer, for one raster line at a time.
 --
 -- At line_start the layer takes its setup (the 15 bytes at $20800/$20820 as

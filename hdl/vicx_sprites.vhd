@@ -1,3 +1,6 @@
+-- SPDX-License-Identifier: GPL-3.0-or-later
+-- Copyright (C) 2026 Michael Hartman
+--
 -- VIC-X sprite engine: N_ENT entries (128 or 64), up to N_LINE sprites
 -- (32 or 16) and 640 pixels a line; the MiSTer build has 128 and 32.
 -- With fewer than 128 entries the table's higher entries are ignored (they

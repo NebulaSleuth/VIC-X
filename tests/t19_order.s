@@ -1,3 +1,6 @@
+; SPDX-License-Identifier: GPL-3.0-or-later
+; Copyright (C) 2026 Michael Hartman
+;
 ; t19_order - the layer order register: two layers and the VIC-II in four
 ; orders, set by raster splits; the border stays on top of every order.
 ;

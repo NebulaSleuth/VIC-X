@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Michael Hartman
+
 """Test the demos' UCI loader (demos/lib/uci.inc) on an Ultimate.
 
     python run_uci_loader.py <ultimate host> [--demo bigworld] [--dir /Temp]

@@ -1,3 +1,6 @@
+; SPDX-License-Identifier: GPL-3.0-or-later
+; Copyright (C) 2026 Michael Hartman
+;
 ; t32_remap - the blitter's optional remap (operation 5): each source byte
 ; that is not the transparent value is looked up in a 256-byte table in VRAM
 ; (descriptor +21-+23) and the table's byte is written.  The table is read

@@ -1,3 +1,6 @@
+; SPDX-License-Identifier: GPL-3.0-or-later
+; Copyright (C) 2026 Michael Hartman
+;
 ; t07_palette - palette register space after reset: entries 0-15 hold the
 ; C64 palette (black is dark, white is bright), entries 16-255 are 0, and
 ; entries read back what was written.

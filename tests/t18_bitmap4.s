@@ -1,3 +1,6 @@
+; SPDX-License-Identifier: GPL-3.0-or-later
+; Copyright (C) 2026 Michael Hartman
+;
 ; t18_bitmap4 - layer 0 as a 4-bit bitmap with a palette bank.
 ;
 ; Bitmap at VRAM $00000, stride 160, palette bank 6 (setup +14).  High

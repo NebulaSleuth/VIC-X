@@ -1,3 +1,6 @@
+; SPDX-License-Identifier: GPL-3.0-or-later
+; Copyright (C) 2026 Michael Hartman
+;
 ; bigworld.s - Big world: a 1 MB, 256-colour world streamed from XRAM.
 ;
 ; The world is one 320-pixel-wide picture about 3200 rows tall (six scenes,

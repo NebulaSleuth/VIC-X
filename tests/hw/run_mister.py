@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Michael Hartman
+
 """Run VIC-X conformance tests on a MiSTer with the C64X core.
 
 Each test is assembled with -D HW_RESULT (the harness then shows PASS or

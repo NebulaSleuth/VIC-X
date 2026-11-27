@@ -1,3 +1,6 @@
+; SPDX-License-Identifier: GPL-3.0-or-later
+; Copyright (C) 2026 Michael Hartman
+;
 ; t11_split - CTRL and the layer setup are latched at the start of each
 ; raster line, so raster splits work like VIC-II register splits.
 ;

@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Michael Hartman
+
 """prep_art - turn the generated demo pictures into VIC-X-ready PNGs.
 
   prep_art.py RAWDIR OUTDIR

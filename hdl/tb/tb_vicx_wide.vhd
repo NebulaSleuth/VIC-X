@@ -1,3 +1,6 @@
+-- SPDX-License-Identifier: GPL-3.0-or-later
+-- Copyright (C) 2026 Michael Hartman
+--
 -- Testbench for the VIC-X wide window ($20842-$20845), on the step 4
 -- testbench: two layers and sprites in a window widened into the border,
 -- edges changed per line (left, right) and per frame (top, bottom), border
