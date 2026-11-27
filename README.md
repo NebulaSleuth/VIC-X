@@ -202,8 +202,9 @@ screenshot over SSH, and judges the border. Needs SSH key access as root.
 
 The default set is the step 1 tests that need neither VICE's monitor nor
 snapshots: t01, t03, t04, t05, t07, t08, t29. Screenshots land in
-`tests/build/mister/`. t04 fails with code 07 until the FPGA block has
-sprites, since it checks VICE's CAP_SPR.
+`tests/build/mister/`. On hardware t04 takes the build's own sizes (sprite
+counts, VRAM, XRAM) within the spec's ranges; it fails with code 07 on a
+build without sprites, where CAP_SPR reads 0.
 
 `tools/u64screen.py <host> out.png` draws the text screen from memory, with
 no stream; `tools/u64grab.py <host> out.png` grabs one frame from the video
