@@ -89,14 +89,27 @@ def quantise(img, colours, dither):
 
 
 def flatten_rows(img, threshold=30):
-    """Snap pixels close to their row's median colour onto it.  Removes the
-    small noise in gradients that would make every tile unique."""
+    """Snap pixels close to their row's main colour onto it.  Removes the
+    small noise in gradients that would make every tile unique.
+
+    The main colour is the median of the row's largest group of alike
+    pixels, not of the whole row: where two areas share a row about half
+    and half, the median of all pixels is a colour between the two, and a
+    row snapped to that shows as a line through the picture."""
     img = img.convert("RGB")
     px = img.load()
     w, h = img.size
     for y in range(h):
         row = [px[x, y] for x in range(w)]
-        med = tuple(sorted(c[k] for c in row)[w // 2] for k in range(3))
+        bins = {}
+        for c in row:
+            bins.setdefault((c[0] >> 4, c[1] >> 4, c[2] >> 4), []).append(c)
+        top = max(bins.values(), key=len)
+        mid = tuple(sorted(c[k] for c in top)[len(top) // 2] for k in range(3))
+        group = [c for c in row if sum(abs(c[k] - mid[k]) for k in range(3)) <= threshold]
+        if not group:               # a small threshold can leave nothing near the median: keep the row
+            continue
+        med = tuple(sorted(c[k] for c in group)[len(group) // 2] for k in range(3))
         for x in range(w):
             if sum(abs(row[x][k] - med[k]) for k in range(3)) <= threshold:
                 px[x, y] = med
