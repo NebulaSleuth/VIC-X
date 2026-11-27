@@ -6,8 +6,8 @@
 ; while one is shown, DMA loads the next picture into the other in the
 ; background.  Each picture fades in (one fade level per frame, copied by
 ; DMA into the palette), stays, fades out, and the layer base flips to the
-; other buffer.  DMA does all the copying; the CPU only starts it, as the
-; CPU load on the bottom row shows.
+; other buffer.  DMA does all the copying; the CPU only starts it.  The
+; bottom row shows the frame rate.
 
 NEED_XRAM_MB = 2
 NEED_FEAT    = VICX_FEAT_BITMAP | VICX_FEAT_BLITTER
@@ -143,8 +143,8 @@ show:
         sta VICX_P0_DATA                ; base bits 16-23: buffer 0 or 1
         jmp show
 
-; End the last frame's CPU count, wait for the line after the display
-; window and start the next count.
+; Count the frame for the rate readout, then wait for the line after the
+; display window.
 frame_start:
         jsr cpu_end
         ldx #251

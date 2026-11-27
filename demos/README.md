@@ -1,9 +1,9 @@
 # VIC-X demos
 
-Seven of the eight demos in the spec's demo plan, and one for the wide window. Each shows its CPU load as
-"CPU nn%": the share of each frame the demo's own code uses (the busiest of
-every 16 frames, measured with the raster line), so you can see how little
-the CPU has to do while VIC-X does the work.
+Seven of the eight demos in the spec's demo plan, and one for the wide window. Each (but sixteen, which has no text, and desktop, which shows its redraw rate) shows its frame rate as
+"FPS nn": how many times a second the demo draws (over its last 16 frames,
+counted with VIC-X's frame counter): 50 on PAL when every frame is drawn,
+25 when a frame's work takes longer than a frame.
 
 | Demo | What it shows | Features |
 |------|---------------|----------|
@@ -141,8 +141,8 @@ In the GTK build of the VICE fork, from an MSYS2 UCRT64 shell (any folder):
 Replace both `parallax` with any other demo's name. This loads the data
 instantly from the REU image, without the disk. Add `-ntsc` for an NTSC
 C64 (about 60 Hz): on a 60 Hz monitor that scrolls more smoothly than PAL's
-50 Hz, which VICE has to show unevenly. NTSC frames are shorter, so the same
-work shows as a higher CPU percentage (bullets: about 49% PAL, 74% NTSC).
+50 Hz, which VICE has to show unevenly. The readout then shows 60
+when every frame is drawn, and 30 where a step takes two frames.
 
 - `-directory` points VICE at its ROMs and keymaps; a build run from its
   build tree does not find them otherwise ("Default keymap not found").
@@ -196,8 +196,8 @@ the REU, a demo says what is missing and stops.
   made the bitmap layer miss fetches (black lines); build with
   `VICX_DEMO_DEFS=BORDER_BLIT` for such a core, and the blitter only runs
   while the beam is outside the display window. Where the front window
-  covers the dirty rectangle, nothing under it is drawn. The menu bar shows the redraw rate next
-  to the CPU load ("50 fps" when every redraw is shown the next frame,
+  covers the dirty rectangle, nothing under it is drawn. The menu bar shows the redraw rate
+  ("50 fps" when every redraw is shown the next frame,
   "--" while nothing changes). The buttons and the mouse are
   read while the CPU waits for the frame or the blitter, so short clicks
   count and the 1351's 6-bit counters do not wrap between reads; two mouse

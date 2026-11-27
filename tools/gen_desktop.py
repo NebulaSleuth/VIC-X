@@ -406,7 +406,7 @@ def main():
         span = (col, col + len(title) + 1)
         menu_info.append((span, col * 8, w, h, [a for _, a in items]))
 
-    # the menu bar: " VIC-X  File  View", the CPU readout at column 32
+    # the menu bar: " VIC-X  File  View", the demo adds its redraw rate at column 33
     bar = [32] * 40
     for title, col, _ in MENUS:
         for n, c in enumerate(sc(title)):

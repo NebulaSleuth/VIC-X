@@ -10,11 +10,11 @@
 ; screen is blanked for the moment the data is copied in.  The picture was
 ; made with Nano Banana (see art/), converted by tools/prep_art.py.
 ;
-; No CPU readout here: the bitmap fills the screen and there is no text.
+; No frame rate readout here: the bitmap fills the screen and there is no text.
 
 NEED_XRAM_MB = 2
 NEED_FEAT    = VICX_FEAT_BLITTER
-CPU_TEXT     = $C800            ; unused: the CPU readout is not shown
+CPU_TEXT     = $C800            ; unused: the frame rate readout is not shown
 .include "demo.inc"
 .include "assets.inc"
 

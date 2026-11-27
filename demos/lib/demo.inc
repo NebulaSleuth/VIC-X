@@ -2,7 +2,7 @@
 ;
 ; A demo defines `main', `NEED_XRAM_MB' (0 if it needs no XRAM), `NEED_FEAT'
 ; (the CAP_FEAT bits it cannot run without, VICX_FEAT_*) and
-; `CPU_TEXT' (where the CPU load readout goes), and includes its generated
+; `CPU_TEXT' (where the frame rate readout goes), and includes its generated
 ; assets.inc, which names its data file.  Before `main', start-up loads that
 ; file into XRAM, unless XRAM already holds the demo's data.  Start-up
 ; runs with interrupts off, unlocks VIC-X and checks it is there, with enough
@@ -48,8 +48,7 @@
         jmp demo_nofeat
 :
         lda #0
-        sta cpu_max
-        sta cpu_max + 1
+        sta fps_on
         sta cpu_frames
         jsr load_data
         jmp main
@@ -177,144 +176,85 @@ loop:   lda addr,x
 done:
 .endmacro
 
-; --- CPU load readout -----------------------------------------------------
-; Call cpu_start when the frame's work begins and cpu_end when it is done.
-; The raster line counts the time (one frame = 312 lines on PAL, 263 on
-; NTSC; the KERNAL notes which at $02A6).  Every 16 frames the busiest of
-; them is printed as "CPU nnn%" at screen address CPU_TEXT (defined by the
-; demo, 8 characters).  cpu_start and cpu_end keep X and Y; they use A.
-
-; Current raster line -> cpu_line (9 bits)
-read_line:
-:       lda $D012
-        sta cpu_line
-        lda $D011
-        and #$80
-        asl
-        rol                             ; bit 8 -> bit 0
-        sta cpu_line + 1
-        lda $D012
-        cmp cpu_line                    ; re-read if the line changed meanwhile
-        bne :-
-        rts
+; --- frame rate readout ---------------------------------------------------
+; Call cpu_end when a frame's work is done (cpu_start, before the work, is
+; kept for the demos that call it and does nothing).  Every 16 calls the
+; rate of those 16 is printed as "FPS nn" at screen address CPU_TEXT (defined
+; by the demo, 8 characters): 16 times the machine's frames a second (50 on
+; PAL, 60 on NTSC; the KERNAL notes which at $02A6) over the frames VIC-X
+; counted meanwhile (FRAME).  A demo that draws every frame shows 50; one
+; whose work takes longer than a frame, and so shows every second frame,
+; shows 25.  cpu_start and cpu_end keep X and Y; they use A.
+;
+; This was a load readout once ("CPU nnn%": the raster lines the work took,
+; as a share of a frame).  It took the line the work ended on alone, so work
+; of 115 % of a frame read as 15 %: the scenes that looked nearly idle were
+; the ones running at half rate.
 
 cpu_start:
-        jsr read_line                   ; uses A only
-        lda cpu_line
-        sta cpu_t0
-        lda cpu_line + 1
-        sta cpu_t0 + 1
         rts
 
 cpu_end:
-        txa                             ; keep X and Y
+        inc cpu_frames
+        lda cpu_frames
+        and #15
+        beq :+
+        rts
+:       txa                             ; keep X and Y
         pha
         tya
         pha
-        jsr cpu_measure
+        jsr fps_show
         pla
         tay
         pla
         tax
         rts
 
-cpu_measure:
-        jsr read_line
-        sec                             ; lines = now - start (+ frame if wrapped)
-        lda cpu_line
-        sbc cpu_t0
-        sta cpu_line
-        lda cpu_line + 1
-        sbc cpu_t0 + 1
-        sta cpu_line + 1
-        bpl :+
-        jsr frame_lines
-        clc
-        lda cpu_line
-        adc cpu_div
-        sta cpu_line
-        lda cpu_line + 1
-        adc cpu_div + 1
-        sta cpu_line + 1
-:       lda cpu_line + 1                ; keep the highest
-        cmp cpu_max + 1
-        bcc @nomax
-        bne @max
-        lda cpu_line
-        cmp cpu_max
-        bcc @nomax
-@max:   lda cpu_line
-        sta cpu_max
-        lda cpu_line + 1
-        sta cpu_max + 1
-@nomax: inc cpu_frames
-        lda cpu_frames
-        and #15
-        beq :+
-        rts
-:       ; percent = max * 100 / frame lines
-        lda cpu_max
-        sta cpu_num
-        lda cpu_max + 1
-        sta cpu_num + 1
-        asl cpu_num                     ; * 4
-        rol cpu_num + 1
-        asl cpu_num
-        rol cpu_num + 1
-        lda cpu_num                     ; keep max * 4
-        sta cpu_line
-        lda cpu_num + 1
-        sta cpu_line + 1
-        ldx #3                          ; * 32
-:       asl cpu_num
-        rol cpu_num + 1
-        dex
-        bne :-
-        clc                             ; max * 32 + max * 4
-        lda cpu_num
-        adc cpu_line
-        sta cpu_line
-        lda cpu_num + 1
-        adc cpu_line + 1
-        sta cpu_line + 1
-        asl cpu_num                     ; * 64
-        rol cpu_num + 1
-        clc                             ; + max * 64 = max * 100
-        lda cpu_num
-        adc cpu_line
-        sta cpu_num
-        lda cpu_num + 1
-        adc cpu_line + 1
-        sta cpu_num + 1
-        jsr frame_lines
-        lda #0                          ; 16-bit divide: cpu_num / cpu_div
-        sta cpu_line
-        sta cpu_line + 1
-        ldx #16
-:       asl cpu_num
-        rol cpu_num + 1
-        rol cpu_line
-        rol cpu_line + 1
-        lda cpu_line
+fps_show:
+        lda VICX_FRAME
+        tax
         sec
-        sbc cpu_div
-        tay
-        lda cpu_line + 1
-        sbc cpu_div + 1
-        bcc @skip
-        sta cpu_line + 1
-        sty cpu_line
-        inc cpu_num
-@skip:  dex
-        bne :-
-        ; print "CPU nnn%" (cpu_num < 256)
+        sbc fps_f0                      ; frames these 16 calls took
+        stx fps_f0
+        ldy fps_on                      ; the first 16 only set the start
+        bne :+
+        inc fps_on
+        rts
+:       sta fps_div
+        cmp #0
+        bne :+
+        rts
+:       lda $02A6                       ; 16 * 50 or 16 * 60
+        beq :+
+        lda #<800
+        ldx #>800
+        bne :++
+:       lda #<960
+        ldx #>960
+:       sta fps_num
+        stx fps_num + 1
+        ldy #0                          ; Y = fps_num / fps_div (255 at most)
+@div:   lda fps_num
+        sec
+        sbc fps_div
+        tax
+        lda fps_num + 1
+        sbc #0
+        bcc @done
+        sta fps_num + 1
+        stx fps_num
+        iny
+        cpy #255
+        bne @div
+@done:  ; print "FPS nn"
         ldx #0
-:       lda cpu_label,x
+:       lda fps_label,x
         sta CPU_TEXT,x
         inx
         cpx #4
         bne :-
-        lda cpu_num
+        tya
         ldy #0                          ; hundreds
 :       cmp #100
         bcc :+
@@ -347,44 +287,22 @@ cpu_measure:
         ora #$30
         sta CPU_TEXT,x
         inx
-        lda #$25                        ; %
-        sta CPU_TEXT,x
-        inx
         lda #$20
 :       cpx #8
         beq :+
         sta CPU_TEXT,x
         inx
         bne :-
-:       lda #0
-        sta cpu_max
-        sta cpu_max + 1
-        rts
+:       rts
 
-; cpu_div = raster lines per frame
-frame_lines:
-        lda $02A6
-        beq :+
-        lda #<312
-        sta cpu_div
-        lda #>312
-        sta cpu_div + 1
-        rts
-:       lda #<263
-        sta cpu_div
-        lda #>263
-        sta cpu_div + 1
-        rts
-
-cpu_label: .byte $03, $10, $15, $20     ; "CPU " in screen codes
+fps_label: .byte $06, $10, $13, $20     ; "FPS " in screen codes
 
 .pushseg
 .bss
-cpu_line:   .res 2
-cpu_t0:     .res 2
-cpu_max:    .res 2
-cpu_num:    .res 2
-cpu_div:    .res 2
+fps_f0:     .res 1                      ; FRAME at the last readout
+fps_on:     .res 1                      ; 0 until fps_f0 is set
+fps_div:    .res 1
+fps_num:    .res 2
 cpu_frames: .res 1
 .popseg
 

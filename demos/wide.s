@@ -132,7 +132,7 @@ main:
         ldx #<txt_name
         ldy #>txt_name
         jsr render_str
-        lda #$FF                        ; nothing in the CPU field yet
+        lda #$FF                        ; nothing in the readout's field yet
         ldx #7
 :       sta cpu_cache,x
         dex
@@ -234,7 +234,7 @@ loop:
         lda main_ctrl
         sta VICX_CTRL
 
-        ; the bar sprites are drawn by now: copy a changed CPU readout in
+        ; the bar sprites are drawn by now: copy a changed frame rate readout in
         ldx #7
 @cpu:   lda CPU_TEXT,x
         cmp cpu_cache,x
@@ -290,7 +290,7 @@ render_str:
         bne :-
 :       rts
 
-; Draw character A (PETSCII letters, digits, space, %) at bar column X.
+; Draw character A (PETSCII letters, digits, space) at bar column X.
 render_char:
         and #$3F
         sta glyph
