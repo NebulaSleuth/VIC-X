@@ -17,6 +17,7 @@
 ; panel's text, 36 characters a line, ten rows a line.
 
 NEED_XRAM_MB = 2
+NEED_FEAT    = VICX_FEAT_BITMAP | VICX_FEAT_BLITTER | VICX_FEAT_WINDOWS
 CPU_TEXT     = $0400 + 24 * 40 + 32     ; bottom row, right
 LD_IN        = $3F00                    ; the loader's buffer, above the program
 .include "demo.inc"
