@@ -1,3 +1,6 @@
+-- SPDX-License-Identifier: GPL-3.0-or-later
+-- Copyright (C) 2026 Michael Hartman
+--
 -- Testbench for VIC-X step 2: layer 0 as a 4- or 8-bit bitmap behind the
 -- VIC-II.  A video generator makes PAL lines (63 cycles of 32 clocks, a
 -- pixel every 4 clocks, the 320x200 window from 15 cycles after the line

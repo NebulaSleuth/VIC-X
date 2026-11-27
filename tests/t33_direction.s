@@ -1,3 +1,6 @@
+; SPDX-License-Identifier: GPL-3.0-or-later
+; Copyright (C) 2026 Michael Hartman
+;
 ; t33_direction - the blitter's optional direction bits (descriptor +1 bit 6
 ; mirror, bit 7 backwards, CAP_BLIT bit 3) and signed strides.  Mirror sends
 ; byte i of a row to width - 1 - i; backwards moves the bytes last first,

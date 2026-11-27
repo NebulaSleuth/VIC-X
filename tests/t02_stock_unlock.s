@@ -1,3 +1,6 @@
+; SPDX-License-Identifier: GPL-3.0-or-later
+; Copyright (C) 2026 Michael Hartman
+;
 ; t02_stock_unlock - with VIC-X disabled (+vicx) the full unlock sequence
 ; does nothing: $D040-$D06F stay VIC-II mirrors.
 ;

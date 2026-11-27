@@ -1,3 +1,6 @@
+; SPDX-License-Identifier: GPL-3.0-or-later
+; Copyright (C) 2026 Michael Hartman
+;
 ; t15_tiles8 - layer 0 as 8-bit 8x8 tiles: map entries, flips, tile
 ; numbers above 255, colour 0 transparent, map wrap.
 ;

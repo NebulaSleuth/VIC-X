@@ -1,3 +1,6 @@
+; SPDX-License-Identifier: GPL-3.0-or-later
+; Copyright (C) 2026 Michael Hartman
+;
 ; t23_sprite_limits - per-line limits (32 sprites, 640 sprite pixels): the
 ; highest entries drop out for that line only, and the overflow flag
 ; ($20841 bit 0) reports it for the frame.

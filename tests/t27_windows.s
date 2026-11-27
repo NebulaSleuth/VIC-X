@@ -1,3 +1,6 @@
+; SPDX-License-Identifier: GPL-3.0-or-later
+; Copyright (C) 2026 Michael Hartman
+;
 ; t27_windows - the XRAM windows: CAP_XRAM, page switching, the REU seeing
 ; the same memory, priority over RAM and KERNAL ROM, slot rules, code
 ; running from a window, the last page.

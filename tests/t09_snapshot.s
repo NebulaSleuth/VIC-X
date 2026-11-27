@@ -1,3 +1,6 @@
+; SPDX-License-Identifier: GPL-3.0-or-later
+; Copyright (C) 2026 Michael Hartman
+;
 ; t09_snapshot - VIC-X state survives a snapshot save and load.
 ;
 ; Run 1 sets up VIC-X state (unlocked, CTRL with the palette remap, port

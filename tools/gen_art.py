@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Michael Hartman
+
 """gen_art - generate the demo artwork as PNGs (no outside assets).
 
   gen_art.py OUTDIR

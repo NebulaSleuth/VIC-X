@@ -1,3 +1,6 @@
+; SPDX-License-Identifier: GPL-3.0-or-later
+; Copyright (C) 2026 Michael Hartman
+;
 ; sixteen.s - Any sixteen colours: a plain C64 multicolour bitmap, in the
 ; stock palette and in sixteen colours chosen for the picture.
 ;

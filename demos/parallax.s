@@ -1,3 +1,6 @@
+; SPDX-License-Identifier: GPL-3.0-or-later
+; Copyright (C) 2026 Michael Hartman
+;
 ; parallax.s - Parallax world: two 256-colour tile layers scrolling at
 ; different speeds behind a normal VIC-II score bar.
 ;

@@ -1,3 +1,6 @@
+; SPDX-License-Identifier: GPL-3.0-or-later
+; Copyright (C) 2026 Michael Hartman
+;
 ; dma_bench - how fast the DMA engine runs on the hardware, with the
 ; layers off and with a bitmap layer fetching.  Not a conformance test.
 ;

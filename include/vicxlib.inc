@@ -1,3 +1,6 @@
+; SPDX-License-Identifier: GPL-3.0-or-later
+; Copyright (C) 2026 Michael Hartman
+;
 ; vicxlib.inc - ca65 helper macros for VIC-X programs
 ;
 ; Port 0 helpers for VRAM and the register space, palette, layer setup,

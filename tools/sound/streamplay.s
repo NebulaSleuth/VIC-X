@@ -1,3 +1,6 @@
+; SPDX-License-Identifier: GPL-3.0-or-later
+; Copyright (C) 2026 Michael Hartman
+;
 ; streamplay.s - plays a SID register stream from XRAM, for listening to and
 ; recording (tools/sound/render_wav.py).  The stream starts at XRAM 0: 32
 ; bytes a frame, the 25 SID registers first.  Each frame (at raster line

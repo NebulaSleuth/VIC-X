@@ -1,3 +1,6 @@
+; SPDX-License-Identifier: GPL-3.0-or-later
+; Copyright (C) 2026 Michael Hartman
+;
 ; t08_remap - CTRL bit 3 shows VIC-II colours through palette entries 0-15.
 ;
 ; Border = colour 0, background = colour 6, then palette entry 0 := FF0000

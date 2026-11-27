@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Michael Hartman
+
 """gen_desktop - the desktop demo's art, layout and script.
 
   gen_desktop.py ART_DIR BUILD_DIR

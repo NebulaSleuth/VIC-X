@@ -1,3 +1,6 @@
+; SPDX-License-Identifier: GPL-3.0-or-later
+; Copyright (C) 2026 Michael Hartman
+;
 ; t06_reset - a machine reset locks VIC-X and restores its defaults
 ; (CTRL, ports, palette entries 0-15).
 ;

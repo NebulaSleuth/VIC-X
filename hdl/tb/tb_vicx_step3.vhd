@@ -1,3 +1,6 @@
+-- SPDX-License-Identifier: GPL-3.0-or-later
+-- Copyright (C) 2026 Michael Hartman
+--
 -- Testbench for VIC-X step 3: two layers, tiles and bitmaps, scrolling and
 -- the layer order.  Same video generator and SDRAM-port model as step 2,
 -- now with border pixels inside the window too; every pixel is compared

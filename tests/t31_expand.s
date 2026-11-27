@@ -1,3 +1,6 @@
+; SPDX-License-Identifier: GPL-3.0-or-later
+; Copyright (C) 2026 Michael Hartman
+;
 ; t31_expand - the blitter's optional expand and masked expand (operations
 ; 3 and 4), and CAP_BLIT.  Skipped (PASS with nothing checked) on a build
 ; whose CAP_BLIT lacks bit 0.  Also: a descriptor with a direction bit, and

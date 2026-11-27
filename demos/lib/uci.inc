@@ -1,3 +1,6 @@
+; SPDX-License-Identifier: GPL-3.0-or-later
+; Copyright (C) 2026 Michael Hartman
+;
 ; uci.inc - load a demo's REU image through the Ultimate Command Interface.
 ;
 ; Needs, from the includer: XRAM_TO_C64 (macro), SIG_XRAM, demo_sig,

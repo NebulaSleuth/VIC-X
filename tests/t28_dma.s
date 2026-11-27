@@ -1,3 +1,6 @@
+; SPDX-License-Identifier: GPL-3.0-or-later
+; Copyright (C) 2026 Michael Hartman
+;
 ; t28_dma - the DMA engine: fill and copy between C64 RAM, VRAM, the
 ; register space and XRAM, 2D rectangles, masked copy, chains, busy, the
 ; DMA-done IRQ bit, a start while busy, length 0, a chain that links back.

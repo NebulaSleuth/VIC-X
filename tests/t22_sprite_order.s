@@ -1,3 +1,6 @@
+; SPDX-License-Identifier: GPL-3.0-or-later
+; Copyright (C) 2026 Michael Hartman
+;
 ; t22_sprite_order - sprites in the mix: lower entries in front of higher
 ; ones, the behind bit, and the sprite engine's place in the layer order.
 ;

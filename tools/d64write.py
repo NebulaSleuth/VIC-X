@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Michael Hartman
+
 """d64write - write a 1541 disk image (.d64) with a chosen interleave per file.
 
 The demos' data file is read by the fast loader (demos/lib/fastload.inc),

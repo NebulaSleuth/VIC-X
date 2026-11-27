@@ -1,3 +1,6 @@
+; SPDX-License-Identifier: GPL-3.0-or-later
+; Copyright (C) 2026 Michael Hartman
+;
 ; t05_ports - VRAM ports 0 and 1: address registers, all 16 step codes in
 ; both directions, 18-bit wrap, data round trips through VRAM and the
 ; register space, and unmapped port space.

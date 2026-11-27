@@ -1,3 +1,6 @@
+-- SPDX-License-Identifier: GPL-3.0-or-later
+-- Copyright (C) 2026 Michael Hartman
+--
 -- Testbench for the VIC-X DMA engine (step 5, external VRAM only).  VRAM,
 -- C64 RAM and XRAM (2 MB) sit behind a model of the SDRAM controller's VIC-X
 -- port; every transfer is also run on a reference that follows the VICE

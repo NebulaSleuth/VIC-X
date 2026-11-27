@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Michael Hartman
+
 """Run a VIC-X demo on a MiSTer with the C64X core and take screenshots.
 
 The demo's REU image (its data, already in XRAM, so the demo skips the disk

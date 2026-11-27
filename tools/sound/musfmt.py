@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Michael Hartman
+
 """Music and sound effects for the SID player (src/sound.s): text in, bytes out.
 
     src/music/instruments.txt   the instrument bank (shared by every tune)

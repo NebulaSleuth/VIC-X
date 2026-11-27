@@ -1,3 +1,6 @@
+; SPDX-License-Identifier: GPL-3.0-or-later
+; Copyright (C) 2026 Michael Hartman
+;
 ; demo.inc - start-up and helpers shared by the VIC-X demos
 ;
 ; A demo defines `main', `NEED_XRAM_MB' (0 if it needs no XRAM) and

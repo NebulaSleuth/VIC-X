@@ -1,4 +1,7 @@
 #!/bin/sh
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Michael Hartman
+#
 # synth_xc7.sh - count VIC-X's Artix-7 (xc7) resources with GHDL + Yosys.
 #
 #   sh hdl/synth_xc7.sh [full|nodma|nospr]          a named build (default: full)

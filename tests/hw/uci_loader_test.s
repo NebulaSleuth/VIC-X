@@ -1,3 +1,6 @@
+; SPDX-License-Identifier: GPL-3.0-or-later
+; Copyright (C) 2026 Michael Hartman
+;
 ; uci_loader_test.s - run the demos' UCI loader (demos/lib/uci.inc) on an
 ; Ultimate without VIC-X. XRAM_TO_C64 is done with REU DMA here, which reads
 ; the same memory. run_uci_loader.py builds and runs it.

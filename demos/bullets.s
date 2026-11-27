@@ -1,3 +1,6 @@
+; SPDX-License-Identifier: GPL-3.0-or-later
+; Copyright (C) 2026 Michael Hartman
+;
 ; bullets.s - Bullet storm: 128 sprites, collision groups, DMA table updates.
 ;
 ; Entry 0 is the player's 32x32 ship, sliding along the bottom (x 16-240),

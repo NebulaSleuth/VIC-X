@@ -1,3 +1,6 @@
+; SPDX-License-Identifier: GPL-3.0-or-later
+; Copyright (C) 2026 Michael Hartman
+;
 ; blitter.s - Blitter: one scene per optional blitter operation.
 ;
 ; The demo reads CAP_BLIT and steps through the operations in the spec's

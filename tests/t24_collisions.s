@@ -1,3 +1,6 @@
+; SPDX-License-Identifier: GPL-3.0-or-later
+; Copyright (C) 2026 Michael Hartman
+;
 ; t24_collisions - sprite collisions: the list at $20900, group masks,
 ; transparent pixels, three-way overlaps, IRQ_STAT bit 0 and the CPU IRQ.
 ;
