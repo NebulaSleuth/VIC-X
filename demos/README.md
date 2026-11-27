@@ -26,7 +26,7 @@ Big world scenes and the lighthouse were generated with Google's Nano Banana Pro
 - landscapes are scaled to 512x200, made seamless by appending a mirrored
   copy (the converter stores the mirrored tiles as flipped copies), reduced
   to 96 colours without dithering, and the sky gradient flattened per row,
-  so the back layer needs 279 tiles and the front 742 (the limit is 1024)
+  so the back layer needs 275 tiles and the front 742 (the limit is 1024)
 - the foreground and the ship were drawn on magenta, which becomes
   transparent
 - the space backdrop (192 colours) and the gallery pictures (240 colours)

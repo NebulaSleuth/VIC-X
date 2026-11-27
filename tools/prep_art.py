@@ -107,6 +107,8 @@ def flatten_rows(img, threshold=30):
         top = max(bins.values(), key=len)
         mid = tuple(sorted(c[k] for c in top)[len(top) // 2] for k in range(3))
         group = [c for c in row if sum(abs(c[k] - mid[k]) for k in range(3)) <= threshold]
+        if not group:               # a small threshold can leave nothing near the median: keep the row
+            continue
         med = tuple(sorted(c[k] for c in group)[len(group) // 2] for k in range(3))
         for x in range(w):
             if sum(abs(row[x][k] - med[k]) for k in range(3)) <= threshold:
