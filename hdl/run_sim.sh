@@ -23,6 +23,14 @@ run() {
         status=1
     fi
 }
+# a run that must fail: it shows a check can catch what it is there for
+run_fail() {
+    echo "== (must fail) $*"
+    if $GHDL -r $FLAGS "$@" --assert-level=failure >/dev/null 2>&1; then
+        echo "FAIL: it passed"
+        status=1
+    fi
+}
 for tb in ../tb/tb_*.vhd; do
     name=$(basename "$tb" .vhd)
     $GHDL -a $FLAGS "$tb"
@@ -31,6 +39,7 @@ for tb in ../tb/tb_*.vhd; do
 done
 run tb_vicx_step1 -gEXT=true -gGAP=128 -gMAXLAT=16
 run tb_vicx_step1 -gEXT=true -gGAP=128 -gMAXLAT=40
+run_fail tb_vicx_step1 -gEXT=true -gGAP=128 -gMAXLAT=16 -gDROP=true
 run tb_vicx_step2 -gEXT=true
 run tb_vicx_step2 -gEXT=true -gREU=true
 run tb_vicx_step2 -gEXT=true -gDMA=true -gWX=40

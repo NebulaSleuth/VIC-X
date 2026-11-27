@@ -41,6 +41,27 @@ to 16 and up to 40 clocks. Deliberately breaking the write snoop or the
 stale-fetch discard makes it fail, and so does a memory that takes up to
 200 clocks (reads find no data ready: `vx_miss`).
 
+## Putting the block into a core
+
+Two things that are easy to get wrong, each met while wiring the block
+into another C64 core:
+
+- **The memory side must not forget a read at reset.** VIC-X still waits
+  for a read that was in flight when `reset` came, and throws its data
+  away. A memory adapter that is reset together with the block and drops
+  the read leaves the `vx_*` port waiting for ever: every later port read
+  gets $FF. The step 1 testbench resets the block at twelve distances
+  from the start of a fetch; with `-gEXT=true -gDROP=true` its memory
+  model forgets such a read and the run fails, as it must (`run_sim.sh`
+  checks that it does).
+- **`win_hit` and `win_addr` follow `bus_addr` with no register.** Use
+  them only while `bus_addr` is the address of the access being made. In
+  a core whose CPU steps some time after the bus was sampled, the old
+  address is still there in between: a windowed read started then gets
+  the last access's byte (seen as code that would not run from a window,
+  while single reads worked). The decode into a core's memory map is also
+  a long path; registering it by one clock is fine.
+
 ## On Artix-7
 
 Built in Vivado 2026.2 (`sh hdl/vivado_xc7.sh`, which runs
