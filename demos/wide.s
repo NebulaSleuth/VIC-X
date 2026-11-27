@@ -21,6 +21,7 @@
 ; at raster line 0: in wide mode the picture runs past line 251.
 
 NEED_XRAM_MB = 2
+NEED_FEAT    = VICX_FEAT_TILES | VICX_FEAT_SPRITES | VICX_FEAT_BLITTER
 CPU_TEXT     = $0400 + 1 * 40 + 20  ; in the score bar
 .include "demo.inc"
 .include "assets.inc"

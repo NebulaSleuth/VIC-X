@@ -20,6 +20,7 @@
 ; to the SID; a new scene's section starts at the next bar line.
 
 NEED_XRAM_MB = 2
+NEED_FEAT    = VICX_FEAT_BITMAP | VICX_FEAT_BLITTER | VICX_FEAT_WINDOWS
 CPU_TEXT     = $0400 + 0 * 40 + 32  ; top row, right
 .include "demo.inc"
 .include "assets.inc"

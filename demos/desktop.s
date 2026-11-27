@@ -30,6 +30,7 @@
 ; checking the demo in headless VICE.
 
 NEED_XRAM_MB = 2
+NEED_FEAT    = VICX_FEAT_BITMAP | VICX_FEAT_SPRITES | VICX_FEAT_BLITTER | VICX_FEAT_WINDOWS
 CPU_TEXT     = $0400 + 32           ; menu bar, right
 LD_IN        = $3800                ; the loader's buffer, above this program
 .include "demo.inc"
