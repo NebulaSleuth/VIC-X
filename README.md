@@ -193,7 +193,8 @@ To watch, hear and control the Ultimate while these run, use u64remote
 `tests/hw/run_mister.py` runs conformance tests on a MiSTer that has the
 C64X core ([NebulaSleuth/C64_MiSTer](https://github.com/NebulaSleuth/C64_MiSTer/tree/vicx), branch `vicx`) in `_Computer`. Each test
 is assembled with `-D HW_RESULT`, so it also shows its result on screen:
-a green border and PASS, or a red border and FAIL with the code in hex.
+a green border and PASS, or a red border and FAIL with the code in hex
+(`FAIL 11` is the check numbered 17 in the source).
 The script loads the core fresh with the PRG through a launch file, takes a
 screenshot over SSH, and judges the border. Needs SSH key access as root.
 

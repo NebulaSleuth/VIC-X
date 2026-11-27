@@ -10,6 +10,11 @@
 ; with them on again the screenshot shows both dropped.
 ; Window (0,0) is screenshot (32,35).
 ;
+; A build with fewer sprites a line (CAP_SPRLINE below 32, e.g. 16) gets line
+; A with that many: entries CAP_SPRLINE-1 to 30 are switched off, entry 31 at
+; x 279 stays the last one shown and entry 32 the one that drops out, so the
+; pixel checks are the same.  Line B's 10 sprites fit either limit.
+;
 ; RUN: -vicx
 ; PIXEL: 311 55 FF0000
 ; PIXEL: 320 55 000000
@@ -54,6 +59,20 @@ main:
         SPRITE 33 + I, I * 28, 60, VICX_SW_64 | VICX_SH_8, VICX_S_ON, PAT64, VICX_S_8BIT
 .endrep
         SPRITE 43, 300, 60, VICX_SW_64 | VICX_SH_8, VICX_S_ON, PATY, VICX_S_8BIT
+
+        ; fewer than 32 sprites a line: line A keeps CAP_SPRLINE of them
+        lda #32
+        sec
+        sbc VICX_CAP_SPRLINE
+        beq @full
+        bcc @full
+        tax
+        VICX_P0_SET VICX_SPRITES + 30 * 8 + VICX_S_YH, VICX_STEP_8 | VICX_STEP_BACK
+        lda #0
+:       sta VICX_P0_DATA
+        dex
+        bne :-
+@full:
 
         lda #VICX_CTRL_SPR | VICX_CTRL_BGTRANS
         sta VICX_CTRL
