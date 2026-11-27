@@ -454,13 +454,15 @@ begin
         -- a reset while a port's fetch is in flight: the block still waits for
         -- that read's data, so the memory must deliver them (a memory side
         -- that is reset with the block and forgets the read leaves VRAM dead:
-        -- -gDROP=true must fail here).  Tried at several distances from the
-        -- write that starts the fetch, to meet it before and after its ack.
+        -- -gDROP=true must fail here).  The low address byte is written last:
+        -- it moves the port to a block not fetched yet, so that write starts
+        -- the fetch (the two before it have had theirs).  The reset comes 1 to
+        -- 12 clocks later, to meet the read before and after its ack.
         if EXT then
             for d in 1 to 12 loop
-                wr(16#D050#, 16#40# + 8 * d);
+                wr(16#D052#, STEP1);
                 wr(16#D051#, 16#01#);
-                wr(16#D052#, STEP1, g => d);
+                wr(16#D050#, 16#40# + 8 * d, g => d);
                 reset <= '1';
                 idle(2);
                 reset <= '0';

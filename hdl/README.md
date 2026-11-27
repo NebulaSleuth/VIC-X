@@ -51,8 +51,9 @@ into another C64 core:
   away. A memory adapter that is reset together with the block and drops
   the read leaves the `vx_*` port waiting for ever: every later port read
   gets $FF. The step 1 testbench resets the block at twelve distances
-  from the start of a fetch; with `-gDROP=true` its memory model forgets
-  such a read and the run fails, as it must.
+  from the start of a fetch; with `-gEXT=true -gDROP=true` its memory
+  model forgets such a read and the run fails, as it must (`run_sim.sh`
+  checks that it does).
 - **`win_hit` and `win_addr` follow `bus_addr` with no register.** Use
   them only while `bus_addr` is the address of the access being made. In
   a core whose CPU steps some time after the bus was sampled, the old
