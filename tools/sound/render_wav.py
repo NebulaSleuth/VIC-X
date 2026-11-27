@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Michael Hartman
+
 """render_wav.py - play a SID register stream in VICE and record it.
 
     python render_wav.py <stream.bin> <seconds> <out.wav>

@@ -1,3 +1,6 @@
+; SPDX-License-Identifier: GPL-3.0-or-later
+; Copyright (C) 2026 Michael Hartman
+;
 ; blitter.s - Blitter: one scene per optional blitter operation.
 ;
 ; The demo reads CAP_BLIT and steps through the operations in the spec's
@@ -17,6 +20,7 @@
 ; panel's text, 36 characters a line, ten rows a line.
 
 NEED_XRAM_MB = 2
+NEED_FEAT    = VICX_FEAT_BITMAP | VICX_FEAT_BLITTER | VICX_FEAT_WINDOWS
 CPU_TEXT     = $0400 + 24 * 40 + 32     ; bottom row, right
 LD_IN        = $3F00                    ; the loader's buffer, above the program
 .include "demo.inc"
@@ -126,6 +130,7 @@ lt2     = $51
 sn      = $52                   ; snake
 half    = $53                   ; (IRQ) 0: next is line 234, 1: line 8
 mf      = $54                   ; 2 bytes: the music's frame
+pfull   = $56                   ; panorama: frames left that draw the whole box (after a turn)
 mptr    = $FD                   ; 2 bytes: (IRQ) the frame in window 1
 MWIN    = $6000
 
@@ -1065,6 +1070,7 @@ dir_scene:
         sta pp
         lda #0
         sta pdir
+        sta pfull
         lda #<DIR_FRAMES
         sta tmr
         lda #>DIR_FRAMES
@@ -1126,7 +1132,22 @@ pan_cols:
 
 ; This buffer's box last showed the picture from pp + 4 (moving right) or
 ; pp - 4 (moving left): move it 4 pixels over itself, then the 4 new columns.
+; That only holds while the direction stays: for the two frames after a turn
+; each buffer's box was last drawn going the other way (8 pixels from where
+; the move takes it to be), so those two frames draw the whole box instead.
+; Without that the part of the box drawn before the turn jumped 6 pixels
+; forward and 2 back from frame to frame until it had scrolled out.
 pan_step:
+        lda pfull
+        beq @move
+        dec pfull
+        lda pp
+        jsr pan_box
+        lda pdir
+        bne :+
+        jmp @went_right
+:       jmp @went_left
+@move:
         lda #VICX_DMA_COPY
         sta d_op
         lda #0
@@ -1162,10 +1183,13 @@ pan_step:
         sta d_w
         lda #BOX_X
         jsr pan_cols
+@went_right:
         dec pp
         dec pp
         bne :+
         inc pdir                        ; at the left end: turn
+        lda #2
+        sta pfull
 :       rts
 @left:  ; left: box[4..w-1] -> box[0..w-5], first byte first
         lda #VICX_DMA_SRC_VRAM | VICX_DMA_DST_VRAM | VICX_DMA_2D
@@ -1189,6 +1213,7 @@ pan_step:
         sta d_w
         lda #BOX_X + BOX_W - 4
         jsr pan_cols
+@went_left:
         inc pp
         inc pp
         lda pp
@@ -1196,6 +1221,8 @@ pan_step:
         bcc :+
         lda #0
         sta pdir                        ; at the right end: turn
+        lda #2
+        sta pfull
 :       rts
 
 dst_to_src:

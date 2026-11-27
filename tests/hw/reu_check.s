@@ -1,3 +1,6 @@
+; SPDX-License-Identifier: GPL-3.0-or-later
+; Copyright (C) 2026 Michael Hartman
+;
 ; reu_check - REU test for a core's memory controller (not a VIC-X test)
 ;
 ; Needs a 16 MB REU.  Stashes a different 4 KB pattern into each of six

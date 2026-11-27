@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Michael Hartman
+
 """png2vicx - convert a PNG into VIC-X bitmaps, tiles, sprites and palettes.
 
 Pixels with alpha below 128 become colour 0, which VIC-X draws as

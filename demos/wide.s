@@ -1,3 +1,6 @@
+; SPDX-License-Identifier: GPL-3.0-or-later
+; Copyright (C) 2026 Michael Hartman
+;
 ; wide.s - Wide screen: the parallax world filling the whole visible frame.
 ;
 ; The same two scrolling layers as parallax.s, drawn 272 rows tall, and the
@@ -21,6 +24,7 @@
 ; at raster line 0: in wide mode the picture runs past line 251.
 
 NEED_XRAM_MB = 2
+NEED_FEAT    = VICX_FEAT_TILES | VICX_FEAT_SPRITES | VICX_FEAT_BLITTER
 CPU_TEXT     = $0400 + 1 * 40 + 20  ; in the score bar
 .include "demo.inc"
 .include "assets.inc"
@@ -131,7 +135,7 @@ main:
         ldx #<txt_name
         ldy #>txt_name
         jsr render_str
-        lda #$FF                        ; nothing in the CPU field yet
+        lda #$FF                        ; nothing in the readout's field yet
         ldx #7
 :       sta cpu_cache,x
         dex
@@ -233,7 +237,7 @@ loop:
         lda main_ctrl
         sta VICX_CTRL
 
-        ; the bar sprites are drawn by now: copy a changed CPU readout in
+        ; the bar sprites are drawn by now: copy a changed frame rate readout in
         ldx #7
 @cpu:   lda CPU_TEXT,x
         cmp cpu_cache,x
@@ -289,7 +293,7 @@ render_str:
         bne :-
 :       rts
 
-; Draw character A (PETSCII letters, digits, space, %) at bar column X.
+; Draw character A (PETSCII letters, digits, space) at bar column X.
 render_char:
         and #$3F
         sta glyph

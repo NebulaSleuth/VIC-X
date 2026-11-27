@@ -1,3 +1,6 @@
+; SPDX-License-Identifier: GPL-3.0-or-later
+; Copyright (C) 2026 Michael Hartman
+;
 ; t03_unlock - unlock, ID, relock, re-unlock; VIC-X registers do not write
 ; through to the VIC-II while unlocked.
 ;

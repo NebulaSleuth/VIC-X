@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Michael Hartman
+
 """gen_desktop - the desktop demo's art, layout and script.
 
   gen_desktop.py ART_DIR BUILD_DIR
@@ -406,7 +409,7 @@ def main():
         span = (col, col + len(title) + 1)
         menu_info.append((span, col * 8, w, h, [a for _, a in items]))
 
-    # the menu bar: " VIC-X  File  View", the CPU readout at column 32
+    # the menu bar: " VIC-X  File  View", the demo adds its redraw rate at column 33
     bar = [32] * 40
     for title, col, _ in MENUS:
         for n, c in enumerate(sc(title)):

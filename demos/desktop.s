@@ -1,10 +1,13 @@
+; SPDX-License-Identifier: GPL-3.0-or-later
+; Copyright (C) 2026 Michael Hartman
+;
 ; desktop.s - Desktop: a GEOS-style windowing desktop.
 ;
 ; Layer 0 is a 320x200 8-bit bitmap, double buffered ($00000 and $10000):
 ; the desktop (wallpaper, menu bar, icons and their labels), the windows
 ; and the menus are all drawn into the hidden buffer, which is shown at the
 ; start of the next frame, so nothing half-drawn is ever on screen.  The
-; menu titles and the CPU readout are VIC-II text in front (lower-case set,
+; menu titles and the redraw rate are VIC-II text in front (lower-case set,
 ; YSCROLL 5 so the text sits in the bar, background transparent).  The
 ; pointer is entry 0 of the sprite engine.
 ;
@@ -30,7 +33,8 @@
 ; checking the demo in headless VICE.
 
 NEED_XRAM_MB = 2
-CPU_TEXT     = $0400 + 32           ; menu bar, right
+NEED_FEAT    = VICX_FEAT_BITMAP | VICX_FEAT_SPRITES | VICX_FEAT_BLITTER | VICX_FEAT_WINDOWS
+CPU_TEXT     = $C800                ; unused: no cpu_end here, the menu bar shows the redraw rate (rate_show)
 LD_IN        = $3800                ; the loader's buffer, above this program
 .include "demo.inc"
 .include "assets.inc"
@@ -277,7 +281,6 @@ loop:
 :       jsr rate_show
         lda last_vf
         sta it_vf
-        jsr cpu_start
         inc frame
         jsr read_input
 .ifdef DESK_TEST
@@ -296,8 +299,7 @@ loop:
         beq :+
         lda it_vf
         sta paint_vf
-:       jsr cpu_end
-        jmp loop
+:       jmp loop
 
 ; Wait for raster lines 251-255 (below the display window), reading the
 ; input meanwhile.
@@ -2034,7 +2036,7 @@ set_wallpaper:
 ; rate divided by the most frames any redraw in them took from its start to
 ; being shown (50 or 60 when every redraw fits in a frame); "--" when
 ; nothing was redrawn.  Waiting for the border counts.
-RATE_TEXT = $0400 + 24
+RATE_TEXT = $0400 + 33                  ; menu bar, right
 rate_show:
         lda last_vf
         sec

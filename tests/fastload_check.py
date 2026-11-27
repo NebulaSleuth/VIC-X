@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Michael Hartman
+
 """Check the demos' fast loader in headless VICE (true drive emulation).
 
 Each demo is started from its disk image with an empty REU; the REU image

@@ -1,3 +1,6 @@
+-- SPDX-License-Identifier: GPL-3.0-or-later
+-- Copyright (C) 2026 Michael Hartman
+--
 -- Testbench for VIC-X step 1: unlock, ID and capability registers, ports,
 -- register space, palette, colour remapping, frame counter and IRQ.
 -- Expected values follow the VICE fork and conformance tests t01-t08.

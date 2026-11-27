@@ -1,3 +1,6 @@
+; SPDX-License-Identifier: GPL-3.0-or-later
+; Copyright (C) 2026 Michael Hartman
+;
 ; uci_probe.s - check the Ultimate Command Interface (UCI) on real hardware.
 ;
 ; Needs an Ultimate with "Command Interface" enabled and an REU of 2 MB or

@@ -1,3 +1,6 @@
+; SPDX-License-Identifier: GPL-3.0-or-later
+; Copyright (C) 2026 Michael Hartman
+;
 ; parallax.s - Parallax world: two 256-colour tile layers scrolling at
 ; different speeds behind a normal VIC-II score bar.
 ;
@@ -8,9 +11,10 @@
 ; made with Nano Banana (see art/).  The VIC-II's text rows
 ; 0-2 are a score bar: CTRL bit 4 is off for those lines (raster split), so
 ; the VIC-II background covers the layers there, and on below.  The bar
-; also shows the CPU load: the share of each frame the demo's own code uses.
+; also shows the frame rate.
 
 NEED_XRAM_MB = 2
+NEED_FEAT    = VICX_FEAT_TILES | VICX_FEAT_BLITTER
 CPU_TEXT     = $0400 + 1 * 40 + 16  ; in the score bar
 .include "demo.inc"
 .include "assets.inc"

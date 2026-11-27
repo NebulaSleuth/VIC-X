@@ -1,3 +1,6 @@
+; SPDX-License-Identifier: GPL-3.0-or-later
+; Copyright (C) 2026 Michael Hartman
+;
 ; t26_wide_split - a partly widened window: the left edge latched per line
 ; (a raster split), the top edge, a layer in front of the VIC-II with CTRL
 ; bit 4 clear, and the border over the 320x200 area on top.

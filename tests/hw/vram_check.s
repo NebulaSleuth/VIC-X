@@ -1,3 +1,6 @@
+; SPDX-License-Identifier: GPL-3.0-or-later
+; Copyright (C) 2026 Michael Hartman
+;
 ; vram_check - all of VRAM through the ports, for an FPGA build whose VRAM
 ; is external memory (the MiSTer's SDRAM).  Not a conformance test: it
 ; checks the memory path, not the spec.

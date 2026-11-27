@@ -1,3 +1,6 @@
+; SPDX-License-Identifier: GPL-3.0-or-later
+; Copyright (C) 2026 Michael Hartman
+;
 ; vicx.inc - VIC-X register names for ca65
 ;
 ; Follows the VIC-X spec register map (draft, spec rev 30, 2026-11-10).

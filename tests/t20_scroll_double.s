@@ -1,3 +1,6 @@
+; SPDX-License-Identifier: GPL-3.0-or-later
+; Copyright (C) 2026 Michael Hartman
+;
 ; t20_scroll_double - with double-width pixels, scroll X counts layer
 ; pixels: one step moves the picture 2 screen pixels.
 ;

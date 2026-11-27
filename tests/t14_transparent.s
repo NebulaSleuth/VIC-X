@@ -1,3 +1,6 @@
+; SPDX-License-Identifier: GPL-3.0-or-later
+; Copyright (C) 2026 Michael Hartman
+;
 ; t14_transparent - bitmap colour 0 is transparent.
 ;
 ; The bitmap is colour 0 in its top 100 lines and colour 32 (blue) below.

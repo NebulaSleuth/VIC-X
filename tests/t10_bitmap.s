@@ -1,3 +1,6 @@
+; SPDX-License-Identifier: GPL-3.0-or-later
+; Copyright (C) 2026 Michael Hartman
+;
 ; t10_bitmap - layer 0 as an 8-bit 320x200 bitmap, aligned with the VIC-II
 ; display window, behind VIC-II characters.
 ;

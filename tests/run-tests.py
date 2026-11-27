@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Michael Hartman
+
 """Build and run the VIC-X conformance tests headless in the VICE fork.
 
 Each tests/tNN_*.s file is assembled with ca65/ld65 into a PRG and run in

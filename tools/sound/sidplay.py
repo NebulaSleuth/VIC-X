@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Michael Hartman
+
 """sidplay.py - TimeWarrior's SID music player (src/sound.s there), in Python.
 
 It plays a tune compiled by musfmt.py frame by frame, as the 6502 player does

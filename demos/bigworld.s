@@ -1,3 +1,6 @@
+; SPDX-License-Identifier: GPL-3.0-or-later
+; Copyright (C) 2026 Michael Hartman
+;
 ; bigworld.s - Big world: a 1 MB, 256-colour world streamed from XRAM.
 ;
 ; The world is one 320-pixel-wide picture about 3200 rows tall (six scenes,
@@ -20,6 +23,7 @@
 ; to the SID; a new scene's section starts at the next bar line.
 
 NEED_XRAM_MB = 2
+NEED_FEAT    = VICX_FEAT_BITMAP | VICX_FEAT_BLITTER | VICX_FEAT_WINDOWS
 CPU_TEXT     = $0400 + 0 * 40 + 32  ; top row, right
 .include "demo.inc"
 .include "assets.inc"

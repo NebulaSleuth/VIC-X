@@ -1,4 +1,7 @@
 #!/bin/sh
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Michael Hartman
+#
 # Simulate the VIC-X block with GHDL.  Run from the UCRT64 shell:
 #   C:\msys64\usr\bin\bash.exe -lc "hdl/run_sim.sh"   (MSYSTEM=UCRT64, CHERE_INVOKING=1)
 # Exits 0 when every testbench passes.  Each testbench runs with VRAM in

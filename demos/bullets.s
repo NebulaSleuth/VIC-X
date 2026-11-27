@@ -1,4 +1,10 @@
+; SPDX-License-Identifier: GPL-3.0-or-later
+; Copyright (C) 2026 Michael Hartman
+;
 ; bullets.s - Bullet storm: 128 sprites, collision groups, DMA table updates.
+;
+; A build with fewer sprite table entries (CAP_SPR below 128) gets as many
+; sprites as it has entries; the title shows the count.
 ;
 ; Entry 0 is the player's 32x32 ship, sliding along the bottom (x 16-240),
 ; over a deep-space picture on layer 1 (an 8-bit bitmap).  The ship and the
@@ -12,10 +18,11 @@
 ; Each frame, at line 251 (after the display window), DMA copies the 1 KB
 ; sprite table built in C64 RAM during the previous frame to $20400; the
 ; engine latches it at the start of the next frame.  Then the CPU moves
-; every bullet for the frame after.  The bottom row shows the CPU load, DMA
-; halts included.
+; every bullet for the frame after.  The bottom row shows the frame
+; rate.
 
 NEED_XRAM_MB = 2
+NEED_FEAT    = VICX_FEAT_BITMAP | VICX_FEAT_SPRITES | VICX_FEAT_BLITTER
 CPU_TEXT     = $0400 + 24 * 40      ; bottom row
 .include "demo.inc"
 .include "assets.inc"
@@ -67,6 +74,37 @@ main:
         sta $D020
         sta $D021
         PRINT_AT 0, title
+
+        ; as many sprites as the build has entries, 128 at most
+        lda VICX_CAP_SPR
+        beq @all                        ; (0: 256 entries)
+        cmp #NB + 2
+        bcc @few
+@all:   lda #NB + 1
+@few:   sta nspr
+        cmp #NB + 1
+        beq @shown
+        ldx #$20                        ; the count in the title, in decimal
+        cmp #100
+        bcc :+
+        sbc #100
+        ldx #$31
+:       ldy #$30
+:       cmp #10
+        bcc :+
+        sbc #10
+        iny
+        bne :-
+:       ora #$30
+        sta $0400 + 17
+        cpx #$20
+        bne :+
+        cpy #$30
+        bne :+
+        ldy #$20
+:       sty $0400 + 16
+        stx $0400 + 15
+@shown:
 
         lda #0
         sta VICX_CTRL
@@ -293,7 +331,7 @@ loop:
         sta (PTR),y
 @next:  jsr ptr_next
         inx
-        cpx #NB + 1
+        cpx nspr
         beq :+
         jmp @bullet
 :
@@ -340,6 +378,7 @@ show_hits:
 title:  .byte "BULLET STORM   128 SPRITES    HITS 0000", 0
 
 .bss
+nspr:       .res 1                  ; sprite entries in use (the ship and the bullets)
 px:         .res 1
 pdir:       .res 1
 budget:     .res 1

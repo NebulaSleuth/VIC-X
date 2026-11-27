@@ -1,3 +1,6 @@
+; SPDX-License-Identifier: GPL-3.0-or-later
+; Copyright (C) 2026 Michael Hartman
+;
 ; ram_check - C64 RAM test for a core's memory controller (not a VIC-X test)
 ;
 ; Writes an address-dependent pattern (low byte EOR high byte EOR key) to

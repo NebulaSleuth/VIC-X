@@ -1,3 +1,6 @@
+; SPDX-License-Identifier: GPL-3.0-or-later
+; Copyright (C) 2026 Michael Hartman
+;
 ; t16_tiles4 - layer 1 alone, 4-bit 16x16 tiles with palette banks, on a
 ; map 64 tiles wide.
 ;

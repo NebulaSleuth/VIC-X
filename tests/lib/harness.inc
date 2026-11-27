@@ -1,3 +1,6 @@
+; SPDX-License-Identifier: GPL-3.0-or-later
+; Copyright (C) 2026 Michael Hartman
+;
 ; harness.inc - common start-up and check macros for VIC-X conformance tests
 ;
 ; A test defines `main' and ends with PASS or a failed check.  Results go to

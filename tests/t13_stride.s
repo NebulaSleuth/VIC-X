@@ -1,3 +1,6 @@
+; SPDX-License-Identifier: GPL-3.0-or-later
+; Copyright (C) 2026 Michael Hartman
+;
 ; t13_stride - bitmap base, stride and double-width pixels.
 ;
 ; Stride 0 makes every line show the same VRAM row.  The row starts at base

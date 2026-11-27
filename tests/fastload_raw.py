@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Michael Hartman
+
 """Debug the fast loader: a test build of a demo (FL_RAWTEST) puts its data
 file into XRAM exactly as it arrives; the XRAM VICE writes back is compared
 with the .dat file, and the bit errors are listed.

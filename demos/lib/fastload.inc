@@ -1,3 +1,6 @@
+; SPDX-License-Identifier: GPL-3.0-or-later
+; Copyright (C) 2026 Michael Hartman
+;
 ; fastload.inc - a fast loader for the demos' data file, for 1541 and 1581.
 ;
 ; Needs, from the includer: data_name / DATA_NAME_LEN (assets.inc), ld_src
