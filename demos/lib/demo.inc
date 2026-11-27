@@ -1,11 +1,13 @@
 ; demo.inc - start-up and helpers shared by the VIC-X demos
 ;
-; A demo defines `main', `NEED_XRAM_MB' (0 if it needs no XRAM) and
+; A demo defines `main', `NEED_XRAM_MB' (0 if it needs no XRAM), `NEED_FEAT'
+; (the CAP_FEAT bits it cannot run without, VICX_FEAT_*) and
 ; `CPU_TEXT' (where the frame rate readout goes), and includes its generated
 ; assets.inc, which names its data file.  Before `main', start-up loads that
 ; file into XRAM, unless XRAM already holds the demo's data.  Start-up
-; runs with interrupts off, unlocks VIC-X and checks it is there; if not, it
-; prints what to do and stops.
+; runs with interrupts off, unlocks VIC-X and checks it is there, with enough
+; XRAM and every feature the demo needs; if not, it prints what is missing
+; and stops.
 
 .include "vicx.inc"
 .include "vicxlib.inc"
@@ -39,6 +41,12 @@
         lda VICX_CAP_XRAM
         cmp #NEED_XRAM_MB
         bcc @noxram
+        lda VICX_CAP_FEAT               ; every feature this demo needs?
+        eor #$FF
+        and #NEED_FEAT
+        beq :+
+        jmp demo_nofeat
+:
         lda #0
         sta fps_on
         sta cpu_frames
@@ -71,6 +79,50 @@ msg_novicx:
         .byte "VIC-X NOT FOUND.", 13, 13
         .byte "THIS DEMO NEEDS A C64 WITH VIC-X:", 13
         .byte "X64SC -VICX, OR AN FPGA CORE WITH IT.", 0
+; This build of VIC-X lacks features the demo needs (A = the missing
+; CAP_FEAT bits): name them and stop.
+demo_nofeat:
+        sta $FD
+        lda #$93
+        jsr $FFD2
+        ldy #0
+:       lda msg_nofeat,y
+        beq :+
+        jsr $FFD2
+        iny
+        bne :-
+:       ldx #0                          ; X: feature bit, Y: its name
+        ldy #0
+@bit:   lsr $FD
+        bcc @skip
+:       lda feat_names,y
+        beq :+
+        jsr $FFD2
+        iny
+        bne :-
+:       lda #13
+        jsr $FFD2
+        iny
+        bne @next
+@skip:  lda feat_names,y                ; over this name
+        beq :+
+        iny
+        bne @skip
+:       iny
+@next:  inx
+        cpx #5
+        bne @bit
+:       jmp :-
+
+msg_nofeat:
+        .byte "THIS BUILD OF VIC-X LACKS FEATURES", 13
+        .byte "THE DEMO NEEDS:", 13, 13, 0
+feat_names:                             ; CAP_FEAT bits 0-4
+        .byte "  TILE LAYERS", 0
+        .byte "  BITMAP LAYERS", 0
+        .byte "  SPRITES", 0
+        .byte "  DMA ENGINE AND BLITTER", 0
+        .byte "  XRAM WINDOWS", 0
 msg_noxram:
         .byte "THIS DEMO NEEDS AN REU OF 2 MB OR MORE.", 13, 13
         .byte "X64SC: -REU -REUSIZE 2048", 13

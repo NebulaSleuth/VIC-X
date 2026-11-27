@@ -10,6 +10,7 @@
 ; bottom row shows the frame rate.
 
 NEED_XRAM_MB = 2
+NEED_FEAT    = VICX_FEAT_BITMAP | VICX_FEAT_BLITTER
 CPU_TEXT     = $0400 + 24 * 40      ; bottom row
 .include "demo.inc"
 .include "assets.inc"

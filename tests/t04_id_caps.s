@@ -6,6 +6,12 @@
 ; (all features since step 5), CAP_BLIT $1F (all the optional blitter operations).  CAP_XRAM is the REU size in MB: 0 here,
 ; since this run has no REU (t27 checks it with one).
 ;
+; On real hardware (-D HW_RESULT) the capability values are the build's own:
+; there the test only asks that they are ones a build can have (VRAM 8 KB to
+; 128 KB, 1 to 128 table entries, 1 to 32 sprites a line and no more than
+; entries, the three display features), and takes any XRAM size, since the
+; machine may have its REU on.
+;
 ; RUN: -vicx
 
 .include "harness.inc"
@@ -16,11 +22,45 @@ main:
         EXPECT VICX_ID0,         $56, 2
         EXPECT VICX_ID1,         $58, 3
         EXPECT VICX_VERSION,     $01, 4
+.ifdef HW_RESULT
+        lda VICX_CAP_VRAM
+        sta capvram
+        bne :+
+        FAIL 5
+:       cmp #$11
+        bcc :+
+        FAIL 5
+:
+        lda VICX_CAP_SPR
+        bne :+
+        FAIL 7
+:       cmp #$81
+        bcc :+
+        FAIL 7
+:
+        lda VICX_CAP_SPRLINE
+        bne :+
+        FAIL 8
+:       cmp #$21
+        bcc :+
+        FAIL 8
+:       cmp VICX_CAP_SPR
+        bcc :+
+        beq :+
+        FAIL 8
+:
+        lda VICX_CAP_FEAT
+        and #VICX_FEAT_TILES | VICX_FEAT_BITMAP | VICX_FEAT_SPRITES
+        EXPECT_A VICX_FEAT_TILES | VICX_FEAT_BITMAP | VICX_FEAT_SPRITES, 9
+.else
+        lda VICX_CAP_VRAM
+        sta capvram
         EXPECT VICX_CAP_VRAM,    $10, 5
         EXPECT VICX_CAP_XRAM,    $00, 6
         EXPECT VICX_CAP_SPR,     $80, 7
         EXPECT VICX_CAP_SPRLINE, $20, 8
         EXPECT VICX_CAP_FEAT,    VICX_FEAT_TILES | VICX_FEAT_BITMAP | VICX_FEAT_SPRITES | VICX_FEAT_BLITTER | VICX_FEAT_WINDOWS, 9
+.endif
 
         ; ID and capabilities are read-only
         lda #$12
@@ -29,7 +69,7 @@ main:
         sta VICX_CAP_VRAM
         EXPECT VICX_ID0,      $56, 10
         EXPECT VICX_VERSION,  $01, 11
-        EXPECT VICX_CAP_VRAM, $10, 12
+        EXPECT_SAME VICX_CAP_VRAM, capvram, 12
 
         ; CTRL: reset value 0, bits 0-4 read back, bits 5-7 read 0
         EXPECT VICX_CTRL, $00, 13
@@ -89,3 +129,4 @@ main:
 
 .bss
 frame0: .res 1
+capvram: .res 1

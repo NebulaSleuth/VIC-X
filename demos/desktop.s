@@ -30,6 +30,7 @@
 ; checking the demo in headless VICE.
 
 NEED_XRAM_MB = 2
+NEED_FEAT    = VICX_FEAT_BITMAP | VICX_FEAT_SPRITES | VICX_FEAT_BLITTER | VICX_FEAT_WINDOWS
 CPU_TEXT     = $C800                ; unused: no cpu_end here, the menu bar shows the redraw rate (rate_show)
 LD_IN        = $3800                ; the loader's buffer, above this program
 .include "demo.inc"

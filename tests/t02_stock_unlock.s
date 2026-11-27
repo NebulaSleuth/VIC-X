@@ -1,6 +1,10 @@
 ; t02_stock_unlock - with VIC-X disabled (+vicx) the full unlock sequence
 ; does nothing: $D040-$D06F stay VIC-II mirrors.
 ;
+; Only for a machine WITHOUT VIC-X (VICE with +vicx).  On hardware that has
+; VIC-X the unlock works and this test fails at its first check (FAIL 02):
+; that is the right result there, not a fault.
+;
 ; RUN: +vicx
 
 .include "harness.inc"
