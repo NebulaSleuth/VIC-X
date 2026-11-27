@@ -8,7 +8,7 @@
 ; made with Nano Banana (see art/).  The VIC-II's text rows
 ; 0-2 are a score bar: CTRL bit 4 is off for those lines (raster split), so
 ; the VIC-II background covers the layers there, and on below.  The bar
-; also shows the CPU load: the share of each frame the demo's own code uses.
+; also shows the frame rate.
 
 NEED_XRAM_MB = 2
 CPU_TEXT     = $0400 + 1 * 40 + 16  ; in the score bar

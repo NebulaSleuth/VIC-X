@@ -12,8 +12,8 @@
 ; Each frame, at line 251 (after the display window), DMA copies the 1 KB
 ; sprite table built in C64 RAM during the previous frame to $20400; the
 ; engine latches it at the start of the next frame.  Then the CPU moves
-; every bullet for the frame after.  The bottom row shows the CPU load, DMA
-; halts included.
+; every bullet for the frame after.  The bottom row shows the frame
+; rate.
 
 NEED_XRAM_MB = 2
 CPU_TEXT     = $0400 + 24 * 40      ; bottom row
