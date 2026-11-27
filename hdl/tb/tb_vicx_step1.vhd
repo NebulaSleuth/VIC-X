@@ -15,7 +15,8 @@ entity tb_vicx_step1 is
         EXT    : boolean := false;  -- VRAM through the vx_* port, with a memory model
         GAP    : natural := 8;      -- clocks per CPU access (128 = four C64 cycles)
         MAXLAT : natural := 16;     -- the model's longest wait for a slot, in clocks
-        SEED   : positive := 1
+        SEED   : positive := 1;
+        DROP   : boolean := false   -- the model forgets a read that a reset finds in flight (must FAIL)
     );
 end entity;
 
@@ -96,11 +97,14 @@ begin
         variable r : real;
         variable a : natural;
         variable blk : std_logic_vector(63 downto 0);
+        variable lost : boolean;
     begin
         wait until rising_edge(clk) and vx_req = '1';
+        lost := false;
         uniform(s1, s2, r);
         for i in 1 to 1 + integer(trunc(r * real(MAXLAT))) loop
             wait until rising_edge(clk);
+            if reset = '1' then lost := true; end if;
         end loop;
         a := to_integer(unsigned(vx_addr)) - 16#100000#;
         if vx_we = '1' then
@@ -118,11 +122,14 @@ begin
         if vx_we = '0' then
             for i in 1 to 3 loop
                 wait until rising_edge(clk);
+                if reset = '1' then lost := true; end if;
             end loop;
-            vx_rdata <= blk;
-            vx_rvalid <= '1';
-            wait until rising_edge(clk);
-            vx_rvalid <= '0';
+            if not (DROP and lost) then
+                vx_rdata <= blk;
+                vx_rvalid <= '1';
+                wait until rising_edge(clk);
+                vx_rvalid <= '0';
+            end if;
         end if;
     end process;
 
@@ -443,6 +450,26 @@ begin
         expect(16#D053#, 0, "t06 entry 63 cleared");
         port1(16#00010#, STEP1);
         expect(16#D053#, 16#A0#, "t06 VRAM kept");
+
+        -- a reset while a port's fetch is in flight: the block still waits for
+        -- that read's data, so the memory must deliver them (a memory side
+        -- that is reset with the block and forgets the read leaves VRAM dead:
+        -- -gDROP=true must fail here).  Tried at several distances from the
+        -- write that starts the fetch, to meet it before and after its ack.
+        if EXT then
+            for d in 1 to 12 loop
+                wr(16#D050#, 16#40# + 8 * d);
+                wr(16#D051#, 16#01#);
+                wr(16#D052#, STEP1, g => d);
+                reset <= '1';
+                idle(2);
+                reset <= '0';
+                idle(GAP);
+                unlock;
+                port1(16#00010#, STEP1);
+                expect(16#D053#, 16#A0#, "VRAM answers after a reset during a fetch");
+            end loop;
+        end if;
 
         -- both ports at random over a small area, so they keep landing in
         -- each other's 8-byte blocks: every read must see every earlier write

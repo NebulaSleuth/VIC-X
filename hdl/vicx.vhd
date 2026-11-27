@@ -70,7 +70,13 @@
 --   bus_addr is the address of the CPU's access, or the REU's on the C64
 --   side; win_hit says a window takes it, and win_addr is the SDRAM
 --   address it goes to instead (the core makes the access a RAM access
---   there, so it reads and writes XRAM over RAM, ROM, I/O and cartridge).
+--   there, so it reads and writes XRAM over RAM, ROM and cartridge; no slot
+--   covers $C000-$DFFF, so a window is never over I/O).  The decode is
+--   combinational from bus_addr: the core must only use win_hit and
+--   win_addr while bus_addr is the address of the access being made (a CPU
+--   core may change its address some time after the bus was sampled, not
+--   at the cycle's edge), and may register them where the path through
+--   its memory map is long.
 --
 -- DMA engine (EXT_VRAM and CAP_FEAT bit 3)
 --   Every space is reached through the vx_* port: C64 RAM at C64_BASE, VRAM
@@ -105,6 +111,11 @@
 --   reset locks VIC-X, clears CTRL, IRQ, the ports and the layer setup, and restores the
 --   stock palette.  The register space is then cleared by a sweep of about
 --   2,500 clocks; VRAM keeps its contents (queued writes still go out).
+--   A read on the vx_* port that is in flight at reset is still waited
+--   for (its data are thrown away when they come): the memory side must
+--   answer every request it has seen, reset or not.  If it is reset with
+--   the block and forgets the read, no later request is made and VRAM
+--   stays dead (tb_vicx_step1 -gEXT=true -gDROP=true shows it).
 
 library ieee;
 use ieee.std_logic_1164.all;
