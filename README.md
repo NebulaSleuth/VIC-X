@@ -193,7 +193,8 @@ To watch, hear and control the Ultimate while these run, use u64remote
 `tests/hw/run_mister.py` runs conformance tests on a MiSTer that has the
 C64X core ([NebulaSleuth/C64_MiSTer](https://github.com/NebulaSleuth/C64_MiSTer/tree/vicx), branch `vicx`) in `_Computer`. Each test
 is assembled with `-D HW_RESULT`, so it also shows its result on screen:
-a green border and PASS, or a red border and FAIL with the code in hex.
+a green border and PASS, or a red border and FAIL with the code in hex
+(`FAIL 11` is the check numbered 17 in the source).
 The script loads the core fresh with the PRG through a launch file, takes a
 screenshot over SSH, and judges the border. Needs SSH key access as root.
 
@@ -201,8 +202,9 @@ screenshot over SSH, and judges the border. Needs SSH key access as root.
 
 The default set is the step 1 tests that need neither VICE's monitor nor
 snapshots: t01, t03, t04, t05, t07, t08, t29. Screenshots land in
-`tests/build/mister/`. t04 fails with code 07 until the FPGA block has
-sprites, since it checks VICE's CAP_SPR.
+`tests/build/mister/`. On hardware t04 takes the build's own sizes (sprite
+counts, VRAM, XRAM) within the spec's ranges; it fails with code 07 on a
+build without sprites, where CAP_SPR reads 0.
 
 `tools/u64screen.py <host> out.png` draws the text screen from memory, with
 no stream; `tools/u64grab.py <host> out.png` grabs one frame from the video
