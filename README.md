@@ -223,5 +223,10 @@ The list is in `stock-compat.txt`.
 ## Licence
 
 VIC-X is free software, released under the GNU General Public License,
-version 2 or (at your option) any later version, the same terms as VICE and
-the MiSTer Commodore 64 core it is built into. See `LICENSE`.
+version 3 or (at your option) any later version (GPL-3.0-or-later). See
+`LICENSE`.
+
+Until 2026-11-27 it was released under version 2 or any later version;
+copies taken before then keep those terms. VICE and the MiSTer Commodore 64
+core it is built into are under version 2 or later, so a build that
+contains VIC-X is distributed under version 3.
